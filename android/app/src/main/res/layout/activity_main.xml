@@ -1,11 +1,37 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:orientation="vertical"
     android:layout_width="match_parent"
-    android:layout_height="match_parent" >
+    android:layout_height="match_parent">
 
-    <org.opencv.android.JavaCameraView
+    <com.openvins.android.JavaCamResView
         android:layout_width="fill_parent"
         android:layout_height="fill_parent"
-        android:id="@+id/main_surface" />
+        android:id="@+id/test_view"
+        />
 
-</LinearLayout>
+
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/open_folder"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="end|bottom"
+        android:layout_marginLeft="10dp"
+        android:layout_marginTop="20dp"
+        android:tint="@color/black"
+        android:scaleType="center"
+        android:src="@drawable/ic_baseline_folder_24" />
+
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/toggle_record"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="end|bottom"
+        android:layout_marginLeft="10dp"
+        android:layout_marginTop="90dp"
+        android:tint="@color/black"
+        android:scaleType="center"
+        android:src="@drawable/ic_baseline_play_arrow_24" />
+
+</RelativeLayout>

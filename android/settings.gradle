@@ -1,5 +1,5 @@
 
-include ':opencv'
-//project(':opencv').projectDir = new File(opencvsdk + '/sdk')
+include ':thirdparty:opencv'
+//include ':open_vins'
 include ':app'
 rootProject.name = "open_vins_android"
