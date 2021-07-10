@@ -1,0 +1,22 @@
+
+apply plugin: 'com.android.library'
+
+def eigen3VersionName = "3.3.9"
+def eigen3VersionCode = ((3 * 100 + 3) * 100 + 9) * 10 + 0
+
+println "Eigen3: " +eigen3VersionName + " " + project.buildscript.sourceFile
+
+android {
+    compileSdkVersion 30
+
+    defaultConfig {
+        minSdkVersion 21
+        targetSdkVersion 30
+
+        versionCode eigen3VersionCode
+        versionName eigen3VersionName
+    }
+}
+
+dependencies {
+}
