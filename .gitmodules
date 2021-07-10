@@ -1,0 +1,3 @@
+[submodule "android/app/src/main/cpp/open_vins"]
+	path = android/app/src/main/cpp/open_vins
+	url = https://github.com/rpng/open_vins
