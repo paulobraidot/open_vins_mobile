@@ -41,8 +41,6 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
     private lateinit var sensorManager: SensorManager
     private var sensorAccel: Sensor? = null
     private var sensorGyro: Sensor? = null
-    private var hasAccel: Boolean = false
-    private var hasGyro: Boolean = false
     private var eventAccel: SensorEvent? = null
     private var eventGyro: SensorEvent? = null
 

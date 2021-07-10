@@ -14,3 +14,9 @@
 .cxx
 local.properties
 .idea
+#app/build
+#app/.cxx
+#thirdparty/opencv/build
+#thirdparty/opencv/.cxx
+#thirdparty/boost/build
+#thirdparty/boost/.cxx

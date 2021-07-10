@@ -14,11 +14,11 @@
             <option value="$PROJECT_DIR$" />
             <option value="$PROJECT_DIR$/app" />
             <option value="$PROJECT_DIR$/thirdparty" />
+            <option value="$PROJECT_DIR$/thirdparty/boost" />
             <option value="$PROJECT_DIR$/thirdparty/opencv" />
           </set>
         </option>
         <option name="resolveModulePerSourceSet" value="false" />
-        <option name="useQualifiedModuleNames" value="true" />
       </GradleProjectSettings>
     </option>
   </component>

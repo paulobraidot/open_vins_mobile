@@ -1,0 +1,43 @@
+
+apply plugin: 'com.android.library'
+
+def boostVersionName = "1.72.0"
+def boostVersionCode = ((1 * 100 + 72) * 100 + 0) * 10 + 0
+
+println "Boost: " +boostVersionName + " " + project.buildscript.sourceFile
+
+android {
+    compileSdkVersion 30
+
+    defaultConfig {
+        minSdkVersion 21
+        targetSdkVersion 30
+
+        versionCode boostVersionCode
+        versionName boostVersionName
+    }
+
+    buildTypes {
+        debug {
+            packagingOptions {
+                doNotStrip '**/*.so'  // controlled by OpenCV CMake scripts
+            }
+        }
+        release {
+            packagingOptions {
+                doNotStrip '**/*.so'  // controlled by OpenCV CMake scripts
+            }
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.txt'
+        }
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['native/libs']
+        }
+    }
+}
+
+dependencies {
+}
