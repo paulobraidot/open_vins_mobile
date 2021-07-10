@@ -3,7 +3,7 @@
 This folder contains the android application that allows for running of OpenVINS on an Android phone.
 We leverage the Android NDK to allow for building of our C++ project directly in the toolchain.
 If you want to use this application, open it up in the latest Android Studio (was 4.1.1 at time of writing).
-
+You might need to use SDK manager to install CMake 3.18.1.
 
 
 
