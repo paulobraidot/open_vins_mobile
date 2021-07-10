@@ -1,5 +1,6 @@
 
 include ':thirdparty:opencv'
+include ':thirdparty:eigen3'
 include ':thirdparty:boost'
 //include ':open_vins'
 include ':app'
