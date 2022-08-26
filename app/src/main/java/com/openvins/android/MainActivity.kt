@@ -84,24 +84,30 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
         setContentView(R.layout.activity_main)
         mOpenCvCameraView = findViewById<View>(R.id.test_view) as JavaCamResView
         mOpenCvCameraView!!.setCvCameraViewListener(this)
-        //mOpenCvCameraView!!.setMaxFrameSize(640,480)
+        //mOpenCvCameraView!!.setMaxFrameSize(640, 480)
         //mOpenCvCameraView!!.setFocusMode(this, Camera.Parameters.FOCUS_MODE_INFINITY)
 
         // Check that we have our accelerometer and gyroscope sensors
         sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         sensorAccel = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         sensorGyro = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
-        if(sensorAccel == null) {
-            Toast.makeText(applicationContext,
-                "ERROR: unable to open accelerometer", Toast.LENGTH_LONG).show()
+        if (sensorAccel == null) {
+            Toast.makeText(
+                applicationContext,
+                "ERROR: unable to open accelerometer", Toast.LENGTH_LONG
+            ).show()
         }
-        if(sensorGyro == null) {
-            Toast.makeText(applicationContext,
-                "ERROR: unable to open accelerometer", Toast.LENGTH_LONG).show()
+        if (sensorGyro == null) {
+            Toast.makeText(
+                applicationContext,
+                "ERROR: unable to open accelerometer", Toast.LENGTH_LONG
+            ).show()
         }
 
         // Our open folder button
-        recordFolder = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS).toString()+"/openvins/"
+        recordFolder =
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
+                .toString() + "/openvins/"
         val fab_folder = findViewById(R.id.open_folder) as FloatingActionButton
         fab_folder.setOnClickListener {
             val builder: AlertDialog.Builder = AlertDialog.Builder(this)
@@ -115,9 +121,12 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
                 override fun onClick(dialog: DialogInterface?, which: Int) {
                     val file = File(input.getText().toString())
                     recordFolder = file.toString()
-                    if((!file.isDirectory && !file.mkdirs()) || file.isFile) {
-                        Toast.makeText(applicationContext,
-                            "ERROR: unable to create directory. ${file.toString()}", Toast.LENGTH_LONG).show()
+                    if ((!file.isDirectory && !file.mkdirs()) || file.isFile) {
+                        Toast.makeText(
+                            applicationContext,
+                            "ERROR: unable to create directory. ${file.toString()}",
+                            Toast.LENGTH_LONG
+                        ).show()
                     } else {
                         hasRecordFolder = true
                         setAppFolderJNI(recordFolder)
@@ -137,11 +146,11 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
         // Our record button
         val fab = findViewById(R.id.toggle_record) as FloatingActionButton
         fab.setOnClickListener {
-            if(!hasRecordFolder) {
+            if (!hasRecordFolder) {
                 Toast.makeText(this, "ERROR: select record folder first!", Toast.LENGTH_LONG).show()
                 return@setOnClickListener
             }
-            isRecording = if(isRecording) {
+            isRecording = if (isRecording) {
                 fab.setImageResource(R.drawable.ic_baseline_play_arrow_24)
                 false
             } else {
@@ -164,7 +173,8 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
                     mOpenCvCameraView!!.setCameraPermissionGranted()
                 } else {
                     Log.e(TAG, "Camera permission was not granted")
-                    Toast.makeText(this, "Camera permission was not granted", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Camera permission was not granted", Toast.LENGTH_LONG)
+                        .show()
                 }
             }
             else -> {
@@ -237,10 +247,11 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
         // Next wait till we have both gyroscope and accelerometer
         // TODO: we should try to be smarter about this selection as they could be
         // TODO: out of sync and we should never know this...
-        if(eventAccel != null && eventGyro != null) {
+        if (eventAccel != null && eventGyro != null) {
             processInertialJNI(
                 eventAccel!!.values[0], eventAccel!!.values[1], eventAccel!!.values[2],
-                eventGyro!!.values[0], eventGyro!!.values[1], eventGyro!!.values[2]);
+                eventGyro!!.values[0], eventGyro!!.values[1], eventGyro!!.values[2]
+            );
             eventAccel = null;
             eventGyro = null;
         }
@@ -254,8 +265,10 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
     private external fun setAppFolderJNI(dir: String)
     private external fun setRecordStateJNI(state: Boolean)
     private external fun processImageJNI(matAddr: Long)
-    private external fun processInertialJNI(ax: Float, ay: Float, az: Float,
-                                            gx: Float, gy: Float, gz: Float)
+    private external fun processInertialJNI(
+        ax: Float, ay: Float, az: Float,
+        gx: Float, gy: Float, gz: Float
+    )
 
     companion object {
         private const val TAG = "MainActivity"

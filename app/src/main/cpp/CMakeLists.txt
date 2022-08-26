@@ -30,17 +30,40 @@ add_library(boost_chrono SHARED IMPORTED)
 set_target_properties(boost_chrono PROPERTIES IMPORTED_LOCATION ${BOOST_DIR}/libs/${ANDROID_ABI}/libboost_chrono.so)
 
 # Include OpenVINS project and list the source files
-include_directories(open_vins/ov_core/src/)
+include_directories(
+        open_vins/ov_core/src/
+        open_vins/ov_init/src/
+        open_vins/ov_msckf/src/
+)
 list(APPEND ov_core_sources
-        open_vins/ov_core/src/init/InertialInitializer.cpp
+        # ov_core
+        open_vins/ov_core/src/cpi/CpiV1.cpp
+        open_vins/ov_core/src/cpi/CpiV2.cpp
+        open_vins/ov_core/src/feat/Feature.cpp
+        open_vins/ov_core/src/feat/FeatureDatabase.cpp
+        open_vins/ov_core/src/feat/FeatureInitializer.cpp
         open_vins/ov_core/src/sim/BsplineSE3.cpp
         open_vins/ov_core/src/track/TrackBase.cpp
+        open_vins/ov_core/src/track/TrackDescriptor.cpp
         open_vins/ov_core/src/track/TrackKLT.cpp
         open_vins/ov_core/src/track/TrackSIM.cpp
+        open_vins/ov_core/src/track/TrackAruco.cpp
         open_vins/ov_core/src/types/Landmark.cpp
-        open_vins/ov_core/src/feat/Feature.cpp
-        open_vins/ov_core/src/feat/FeatureInitializer.cpp
-        )
+        open_vins/ov_core/src/utils/print.cpp
+        # ov_init
+        open_vins/ov_init/src/init/InertialInitializer.cpp
+        open_vins/ov_init/src/static/StaticInitializer.cpp
+        # ov_msckf
+        open_vins/ov_msckf/src/core/VioManager.cpp
+        open_vins/ov_msckf/src/core/VioManagerHelper.cpp
+        open_vins/ov_msckf/src/state/Propagator.cpp
+        open_vins/ov_msckf/src/state/State.cpp
+        open_vins/ov_msckf/src/state/StateHelper.cpp
+        open_vins/ov_msckf/src/update/UpdaterHelper.cpp
+        open_vins/ov_msckf/src/update/UpdaterMSCKF.cpp
+        open_vins/ov_msckf/src/update/UpdaterSLAM.cpp
+        open_vins/ov_msckf/src/update/UpdaterZeroVelocity.cpp
+)
 
 
 # Creates and names a library, sets it as either STATIC
