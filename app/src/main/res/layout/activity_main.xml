@@ -6,10 +6,9 @@
     android:layout_height="match_parent">
 
     <com.openvins.android.JavaCamResView
-        android:layout_width="fill_parent"
-        android:layout_height="fill_parent"
         android:id="@+id/test_view"
-        />
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
 
 
     <com.google.android.material.floatingactionbutton.FloatingActionButton
@@ -30,8 +29,19 @@
         android:layout_gravity="end|bottom"
         android:layout_marginLeft="10dp"
         android:layout_marginTop="90dp"
-        android:tint="@color/black"
         android:scaleType="center"
-        android:src="@drawable/ic_baseline_play_arrow_24" />
+        android:src="@drawable/ic_save"
+        android:tint="@color/black" />
+
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/toggle_reset"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="end|bottom"
+        android:layout_marginLeft="10dp"
+        android:layout_marginTop="160dp"
+        android:scaleType="center"
+        android:src="@drawable/ic_baseline_play_arrow_24"
+        android:tint="@color/black" />
 
 </RelativeLayout>

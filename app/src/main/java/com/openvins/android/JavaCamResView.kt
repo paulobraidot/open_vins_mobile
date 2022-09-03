@@ -27,9 +27,11 @@ class JavaCamResView(context: Context?, attrs: AttributeSet?) : JavaCameraView(c
 //            params.focusMode = Camera.Parameters.FOCUS_MODE_INFINITY
 
         // Limit the exposure
-        //params.exposureCompensation = -10
+        params.setAutoExposureLock(false)
+        params.exposureCompensation = -10
         //params.autoExposureLock = true
-        params.focusMode = Camera.Parameters.FOCUS_MODE_FIXED
+        //params.focusMode = Camera.Parameters.FOCUS_MODE_FIXED
+        params.focusMode = Camera.Parameters.FOCUS_MODE_AUTO
 
         // Finally write our parameters
         mCamera.setParameters(params)

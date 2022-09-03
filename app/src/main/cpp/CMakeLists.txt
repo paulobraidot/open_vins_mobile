@@ -39,6 +39,11 @@ set_target_properties(boost_chrono PROPERTIES IMPORTED_LOCATION ${BOOST_DIR}/lib
 # Enable compile optimizations
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -fsee -fomit-frame-pointer -fno-signed-zeros -fno-math-errno -funroll-loops")
 
+# Flags
+add_definitions(-DROS_AVAILABLE=0)
+add_definitions(-DENABLE_ARUCO_TAGS=0)
+add_definitions(-DANDRIOD=1)
+
 # Include OpenVINS project and list the source files
 include_directories(
         open_vins/ov_core/src/

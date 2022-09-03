@@ -38,6 +38,7 @@
 #define TAG "OVLIB"
 
 bool is_recording = false;
+bool is_running_ov = false;
 bool app_folder_set = false;
 std::string app_folder = "/sdcard/";
 std::string save_folder = "/sdcard/";
@@ -69,10 +70,11 @@ std::map<int, double> camera_last_timestamp;
 
 // Visualization data files
 double viz_rate = 20.0;
-double viz_time = -1;
+double viz_time = -1.0;
 double viz_track_rate = 0.0;
 cv::Mat viz_image;
-
+std::string viz_state1 = "";
+std::string viz_state2 = "";
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_openvins_android_MainActivity_setAppFolderJNI(JNIEnv *env, jobject instance, jstring dir) {
@@ -120,6 +122,20 @@ Java_com_openvins_android_MainActivity_setRecordStateJNI(JNIEnv *env, jobject in
 
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_openvins_android_MainActivity_toggleSystemJNI(JNIEnv *env, jobject instance,
+                                                       jboolean stateAddr) {
+    is_running_ov = (bool) stateAddr;
+    if(!is_running_ov) {
+        std::lock_guard<std::mutex> lck(camera_queue_mtx);
+        sys = nullptr;
+        viz_time = -1;
+        viz_track_rate = 0.0;
+        viz_state1 = "";
+        viz_state2 = "";
+    }
+}
+
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject instance,
@@ -152,7 +168,7 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
     }
 
     // Construct our tracker object if needed
-    if (sys == nullptr) {
+    if (is_running_ov && sys == nullptr) {
 
         // Log level
         ov_core::Printer::setPrintLevel(ov_core::Printer::PrintLevel::ALL);
@@ -174,7 +190,8 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
         params.grid_x = 3;
         params.grid_y = 3;
         params.min_px_dist = 20;
-        params.track_frequency = 10.0;
+        params.track_frequency = 30.0;
+        params.retri_active_features = false;
         params.state_options.do_fej = true;
         params.state_options.imu_avg = true;
         params.state_options.use_rk4_integration = false; // seems to be very slow!
@@ -207,6 +224,7 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
                                 "unable to parse all parameters, please fix!!!");
             return;
         } else {
+            std::lock_guard<std::mutex> lck(camera_queue_mtx);
             sys = std::make_shared<ov_msckf::VioManager>(params);
         }
 
@@ -214,25 +232,29 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
 
     // Try to process the image, check if we should drop this image
     // We will append this image to the queue if we need to
-    int cam_id0 = 0;
-    double time_delta = 1.0 / sys->get_params().track_frequency;
-    if (sys != nullptr && (camera_last_timestamp.find(cam_id0) == camera_last_timestamp.end() ||
-                           time_in_sec > camera_last_timestamp.at(cam_id0) + time_delta)) {
+    if (sys != nullptr) {
 
-        // Record the time we will append the queue
-        camera_last_timestamp[cam_id0] = time_in_sec;
+        // See if the message should be dropped / skipped
+        int cam_id0 = 0;
+        double time_delta = 1.0 / sys->get_params().track_frequency;
+        if(camera_last_timestamp.find(cam_id0) == camera_last_timestamp.end() ||
+            time_in_sec > camera_last_timestamp.at(cam_id0) + time_delta) {
 
-        // Create the measurement
-        ov_core::CameraData message;
-        message.timestamp = time_in_sec;
-        message.sensor_ids.push_back(cam_id0);
-        message.images.push_back(mat_gray.clone());
-        message.masks.push_back(cv::Mat::zeros(mat_gray.rows, mat_gray.cols, CV_8UC1));
+            // Record the time we will append the queue
+            camera_last_timestamp[cam_id0] = time_in_sec;
 
-        // Append it to our queue of images
-        std::lock_guard<std::mutex> lck(camera_queue_mtx);
-        camera_queue.push_back(message);
-        std::sort(camera_queue.begin(), camera_queue.end());
+            // Create the measurement
+            ov_core::CameraData message;
+            message.timestamp = time_in_sec;
+            message.sensor_ids.push_back(cam_id0);
+            message.images.push_back(mat_gray.clone());
+            message.masks.push_back(cv::Mat::zeros(mat_gray.rows, mat_gray.cols, CV_8UC1));
+
+            // Append it to our queue of images
+            std::lock_guard<std::mutex> lck(camera_queue_mtx);
+            camera_queue.push_back(message);
+            std::sort(camera_queue.begin(), camera_queue.end());
+        }
     }
 
     // Apply our transformations
@@ -244,7 +266,7 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
     //}
 
     // log computation time to Android Logcat
-    double totalTime = double(clock() - begin) / CLOCKS_PER_SEC;
+    // double totalTime = double(clock() - begin) / CLOCKS_PER_SEC;
     //__android_log_print(ANDROID_LOG_INFO, TAG, "adaptiveThreshold computation time = %f seconds (%f hz)\n", totalTime, 1.0/totalTime);
     //__android_log_print(ANDROID_LOG_INFO, TAG, "adaptiveThreshold matrix size %d x %d\n", mat.rows, mat.cols);
 
@@ -255,7 +277,12 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
 
     // Get updated frame (if no frame, then just display the current)
     if (viz_time == -1 || (time_in_sec - viz_time) > 1.0 / viz_rate) {
-        cv::Mat temp_img = sys->get_historical_viz_image();
+        cv::Mat temp_img;
+        if(sys != nullptr) {
+            temp_img = sys->get_historical_viz_image();
+        } else {
+            viz_image = mat.clone();
+        }
         if (!temp_img.empty()) {
             viz_image = temp_img.clone();
             viz_time = time_in_sec;
@@ -281,6 +308,14 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
     cv::putText(mat_out, ((is_recording) ? "recording" : "waiting"),
                 cv::Point(mat_out.cols - 150, 60), cv::FONT_HERSHEY_COMPLEX_SMALL, 1.5,
                 cv::Scalar(0, 255, 0), 2);
+
+    // Show the current state estimate if we are estimating!
+    if(sys != nullptr) {
+        cv::putText(mat_out, viz_state1, cv::Point(10, mat_out.rows - 60),
+                cv::FONT_HERSHEY_COMPLEX_SMALL, 1.0, cv::Scalar(255, 0, 0), 2);
+        cv::putText(mat_out, viz_state2, cv::Point(10, mat_out.rows - 30),
+                cv::FONT_HERSHEY_COMPLEX_SMALL, 1.0, cv::Scalar(255, 0, 0), 2);
+    }
 
     // Finally replace the image that was passed in
     mat = mat_out.clone();
@@ -363,7 +398,19 @@ Java_com_openvins_android_MainActivity_processInertialJNI(JNIEnv *env, jobject i
                         double time_total = (rT0_2 - rT0_1).total_microseconds() * 1e-6;
                         PRINT_ERROR("[TIME]: %.4f seconds total (%.1f hz, %.2f ms behind)\n",
                                     time_total, 1.0 / time_total, update_dt);
+
+                        // Update vizualization stuff here
                         viz_track_rate = 1.0 / time_total;
+                        auto state = sys->get_state();
+                        auto q = state->_imu->quat();
+                        auto p = state->_imu->quat();
+                        std::stringstream ss1, ss2;
+                        ss1 << std::fixed << std::setprecision(3);
+                        ss1 << "q = " << q(0) << "," << q(1) << "," << q(2) << "," << q(3);
+                        ss2 << std::fixed << std::setprecision(2);
+                        ss2 << "p = " << p(0) << "," << p(1) << "," << p(2);
+                        viz_state1 = ss1.str();
+                        viz_state2 = ss2.str();
                     }
                 }
                 thread_update_running = false;

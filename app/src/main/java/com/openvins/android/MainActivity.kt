@@ -35,6 +35,7 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
     private var mOpenCvCameraView: JavaCamResView? = null
     private var mGrayMat: Mat? = null
     private var isRecording: Boolean = false
+    private var isRunningOV: Boolean = false
     private var hasRecordFolder: Boolean = false
     private var recordFolder: String = ""
 
@@ -151,13 +152,26 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
                 return@setOnClickListener
             }
             isRecording = if (isRecording) {
-                fab.setImageResource(R.drawable.ic_baseline_play_arrow_24)
+                fab.setImageResource(R.drawable.ic_save)
                 false
             } else {
                 fab.setImageResource(R.drawable.ic_baseline_close_24)
                 true
             }
             setRecordStateJNI(isRecording)
+        }
+
+        // Our start / stop openvins button
+        val reset = findViewById(R.id.toggle_reset) as FloatingActionButton
+        reset.setOnClickListener {
+            isRunningOV = if (isRunningOV) {
+                reset.setImageResource(R.drawable.ic_baseline_play_arrow_24)
+                false
+            } else {
+                reset.setImageResource(R.drawable.ic_stop_system)
+                true
+            }
+            toggleSystemJNI(isRunningOV)
         }
 
     }
@@ -199,10 +213,18 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
             mLoaderCallback.onManagerConnected(LoaderCallbackInterface.SUCCESS)
         }
         sensorAccel?.also { sensor ->
-            sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME) //SENSOR_DELAY_FASTEST
+            sensorManager.registerListener(
+                this,
+                sensor,
+                SensorManager.SENSOR_DELAY_GAME
+            ) //SENSOR_DELAY_FASTEST
         }
         sensorGyro?.also { sensor ->
-            sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME) //SENSOR_DELAY_FASTEST
+            sensorManager.registerListener(
+                this,
+                sensor,
+                SensorManager.SENSOR_DELAY_GAME
+            ) //SENSOR_DELAY_FASTEST
         }
     }
 
@@ -264,6 +286,7 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
 
     private external fun setAppFolderJNI(dir: String)
     private external fun setRecordStateJNI(state: Boolean)
+    private external fun toggleSystemJNI(state: Boolean)
     private external fun processImageJNI(matAddr: Long)
     private external fun processInertialJNI(
         ax: Float, ay: Float, az: Float,
