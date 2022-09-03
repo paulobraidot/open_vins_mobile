@@ -18,10 +18,11 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags "-std=c++11 -frtti -fexceptions"
-                abiFilters 'x86', 'x86_64', 'armeabi-v7a', 'arm64-v8a'
+                abiFilters 'x86', 'x86_64', 'arm64-v8a' // 'armeabi-v7a',
                 arguments "-DOpenCV_DIR=" + project(':thirdparty:opencv').projectDir.absolutePath + "/native",
                         "-DBOOST_DIR=" + project(':thirdparty:boost').projectDir.absolutePath,
-                        "-DEIGEN3_DIR=" + project(':thirdparty:eigen3').projectDir.absolutePath
+                        "-DEIGEN3_DIR=" + project(':thirdparty:eigen3').projectDir.absolutePath,
+                        "-DANDROID_ARM_NEON=ON"
             }
         }
     }

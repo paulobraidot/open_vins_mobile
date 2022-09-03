@@ -199,10 +199,10 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
             mLoaderCallback.onManagerConnected(LoaderCallbackInterface.SUCCESS)
         }
         sensorAccel?.also { sensor ->
-            sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_FASTEST)
+            sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME) //SENSOR_DELAY_FASTEST
         }
         sensorGyro?.also { sensor ->
-            sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_FASTEST)
+            sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME) //SENSOR_DELAY_FASTEST
         }
     }
 

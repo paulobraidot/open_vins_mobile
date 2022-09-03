@@ -10,7 +10,10 @@
 #include <sstream>
 #include <chrono>
 #include <iostream>
+#include <thread>
 #include <fstream>
+#include <memory>
+#include <mutex>
 
 #include <opencv2/core/core.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
@@ -23,27 +26,59 @@
 #include <boost/version_ndk.hpp>
 #include <boost/chrono.hpp>
 #include <boost/lexical_cast.hpp>
+#include <thread>
 
 // OpenVINS project
-#include "track/TrackKLT.h"
-#include "cam/CamRadtan.h"
-#include "feat/Feature.h"
-#include "feat/FeatureDatabase.h"
+#include "core/VioManager.h"
+#include "core/VioManagerOptions.h"
+#include "state/State.h"
+#include "utils/opencv_yaml_parse.h"
+#include "utils/sensor_data.h"
 
-#define TAG "NativeLib"
+#define TAG "OVLIB"
 
 bool is_recording = false;
+bool app_folder_set = false;
 std::string app_folder = "/sdcard/";
 std::string save_folder = "/sdcard/";
 std::ofstream imu_csv;
-std::shared_ptr<ov_core::TrackKLT> tracker = nullptr;
-std::deque<double> clonetimes;
+
+//=========================================================
+// OPENVINS SPECIFIC VARS - START
+//=========================================================
+
+// Master VIO system :)
+std::shared_ptr<ov_msckf::VioManager> sys = nullptr;
+
+// Thread atomics
+std::atomic<bool> thread_update_running(false);
+
+// Queue up camera measurements sorted by time and trigger once we have
+// exactly one IMU measurement with timestamp newer than the camera measurement
+// This also handles out-of-order camera measurements, which is rare, but
+// a nice feature to have for general robustness to bad camera drivers.
+std::deque<ov_core::CameraData> camera_queue;
+std::mutex camera_queue_mtx;
+
+// Last camera message timestamps we have received (mapped by cam id)
+std::map<int, double> camera_last_timestamp;
+
+//=========================================================
+// OPENVINS SPECIFIC VARS - END
+//=========================================================
+
+// Visualization data files
+double viz_rate = 20.0;
+double viz_time = -1;
+double viz_track_rate = 0.0;
+cv::Mat viz_image;
 
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_openvins_android_MainActivity_setAppFolderJNI(JNIEnv *env, jobject instance, jstring dir) {
     const char *temp = env->GetStringUTFChars(dir, NULL);
     app_folder = std::string(temp);
+    app_folder_set = true;
     __android_log_print(ANDROID_LOG_INFO, TAG, "export app folder: %s\n", app_folder.c_str());
 }
 
@@ -105,57 +140,100 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
 
     // If recording save to disk
     if (is_recording) {
-
-        // Write to disk
         std::string filename = save_folder + "cam0/" + std::to_string(time_in_ns) + ".png";
         cv::imwrite(filename, mat_gray);
         __android_log_print(ANDROID_LOG_INFO, TAG, "saved file: %s\n", filename.c_str());
-
     }
-    //__android_log_print(ANDROID_LOG_INFO, TAG, "here 0");
+
+    // Return if the app folder has not been set yet
+    if (!app_folder_set) {
+        //__android_log_print(ANDROID_LOG_INFO, TAG, "here 0");
+        return;
+    }
 
     // Construct our tracker object if needed
-    if (tracker == nullptr) {
-
-        // Parameters for our extractor
-        int num_pts = 100;
-        int num_aruco = 1024;
-        int fast_threshold = 30;
-        int grid_x = 5;
-        int grid_y = 5;
-        int min_px_dist = 20;
-        bool use_stereo = false;
-        ov_core::TrackBase::HistogramMethod method = ov_core::TrackBase::HISTOGRAM;
-
-        // Fake camera info (we don't need this, as we are not using the normalized coordinates for anything)
-        std::unordered_map<size_t, std::shared_ptr<ov_core::CamBase>> cameras;
-        for (int i = 0; i < 2; i++) {
-            Eigen::Matrix<double, 8, 1> cam0_calib;
-            cam0_calib << 1, 1, 0, 0, 0, 0, 0, 0;
-            std::shared_ptr<ov_core::CamBase> camera_calib = std::make_shared<ov_core::CamRadtan>(
-                    100, 100);
-            camera_calib->set_value(cam0_calib);
-            cameras.insert({i, camera_calib});
-        }
-
-        // DEBUG: create example klt tracker object
-        tracker = std::make_shared<ov_core::TrackKLT>(cameras, num_pts, num_aruco, use_stereo,
-                                                      method, fast_threshold, grid_x, grid_y,
-                                                      min_px_dist);
+    if (sys == nullptr) {
 
         // Log level
-        ov_core::Printer::setPrintLevel(ov_core::Printer::PrintLevel::DEBUG);
+        ov_core::Printer::setPrintLevel(ov_core::Printer::PrintLevel::ALL);
+
+        // Load the config
+        std::string config_path = app_folder + "/config/estimator_config.yaml";
+        auto parser = std::make_shared<ov_core::YamlParser>(config_path, false);
+        ov_msckf::VioManagerOptions params;
+        params.print_and_load(parser);
+
+        // Override some key parameters we need
+        params.use_multi_threading_subs = true;
+        params.use_klt = true;
+        params.use_aruco = false;
+        params.use_stereo = false;
+        params.downsample_cameras = false;
+        params.num_opencv_threads = 1;
+        params.num_pts = 100;
+        params.grid_x = 3;
+        params.grid_y = 3;
+        params.min_px_dist = 20;
+        params.track_frequency = 10.0;
+        params.state_options.do_fej = true;
+        params.state_options.imu_avg = true;
+        params.state_options.use_rk4_integration = false; // seems to be very slow!
+        params.state_options.do_calib_camera_pose = true;
+        params.state_options.do_calib_camera_intrinsics = true;
+        params.state_options.do_calib_camera_timeoffset = true;
+        params.state_options.max_clone_size = 8;
+        params.state_options.max_slam_features = 10;
+        params.state_options.max_slam_in_update = 20;
+        params.state_options.max_msckf_in_update = 20;
+        params.state_options.num_cameras = 1;
+        params.init_options.init_dyn_use = false;
+        params.init_options.init_max_features = 25;
+        params.init_options.init_window_time = 1.0;
+        params.init_options.init_imu_thresh = 0.4;
+        params.init_options.init_max_disparity = 2.0;
+
+        // Feature triangulation
+        params.featinit_options.triangulate_1d = true;
+        params.featinit_options.refine_features = false;
+
+        // Timing stats
+        params.record_timing_information = false;
+        params.record_timing_filepath = "ov_msckf_timing.txt";
+
+        // Ensure we read in all parameters required, create the VIO manager
+        if (!parser->successful()) {
+            //PRINT_ERROR(RED "[SERIAL]: unable to parse all parameters, please fix\n" RESET);
+            __android_log_print(ANDROID_LOG_ERROR, TAG,
+                                "unable to parse all parameters, please fix!!!");
+            return;
+        } else {
+            sys = std::make_shared<ov_msckf::VioManager>(params);
+        }
 
     }
 
-    // Then call on our tracking
-    ov_core::CameraData message;
-    message.timestamp = time_in_sec;
-    message.sensor_ids.push_back(0);
-    message.images.push_back(mat_gray.clone());
-    cv::Mat mask = cv::Mat::zeros(mat_gray.rows, mat_gray.cols, CV_8UC1);
-    message.masks.push_back(mask.clone());
-    tracker->feed_new_camera(message);
+    // Try to process the image, check if we should drop this image
+    // We will append this image to the queue if we need to
+    int cam_id0 = 0;
+    double time_delta = 1.0 / sys->get_params().track_frequency;
+    if (sys != nullptr && (camera_last_timestamp.find(cam_id0) == camera_last_timestamp.end() ||
+                           time_in_sec > camera_last_timestamp.at(cam_id0) + time_delta)) {
+
+        // Record the time we will append the queue
+        camera_last_timestamp[cam_id0] = time_in_sec;
+
+        // Create the measurement
+        ov_core::CameraData message;
+        message.timestamp = time_in_sec;
+        message.sensor_ids.push_back(cam_id0);
+        message.images.push_back(mat_gray.clone());
+        message.masks.push_back(cv::Mat::zeros(mat_gray.rows, mat_gray.cols, CV_8UC1));
+
+        // Append it to our queue of images
+        std::lock_guard<std::mutex> lck(camera_queue_mtx);
+        camera_queue.push_back(message);
+        std::sort(camera_queue.begin(), camera_queue.end());
+    }
 
     // Apply our transformations
     //cv::adaptiveThreshold(mat, mat, 255, cv::ADAPTIVE_THRESH_MEAN_C, cv::THRESH_BINARY_INV, 21, 5);
@@ -175,44 +253,30 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
     //================================================================
     //================================================================
 
-    // Get updated frame
-    cv::Mat mat_history = mat.clone();
-    tracker->display_history(mat_history, 0, 255, 255, 255, 255, 255);
-
-    // Draw the extractions
-    cv::Mat mat_active = mat.clone();
-    tracker->display_active(mat_active, 0, 255, 255, 255, 255, 255);
-
-    // Push back the current time, as a clone time
-    clonetimes.push_back(time_in_sec);
-
-    // Marginalized features if we have reached 5 frame tracks
-    auto database = tracker->get_feature_database();
-    if ((int) clonetimes.size() >= 10) {
-        // Remove features that have reached their max track length
-        double margtime = clonetimes.at(0);
-        clonetimes.pop_front();
-        std::vector<std::shared_ptr<ov_core::Feature>> feats_marg = database->features_containing(
-                margtime);
-        // Delete theses feature pointers
-        for (size_t i = 0; i < feats_marg.size(); i++) {
-            feats_marg[i]->to_delete = true;
+    // Get updated frame (if no frame, then just display the current)
+    if (viz_time == -1 || (time_in_sec - viz_time) > 1.0 / viz_rate) {
+        cv::Mat temp_img = sys->get_historical_viz_image();
+        if (!temp_img.empty()) {
+            viz_image = temp_img.clone();
+            viz_time = time_in_sec;
         }
     }
+    if (viz_image.empty()) {
+        viz_image = mat.clone();
+    }
+    cv::Mat mat_out = viz_image.clone();
 
     // Resize the display of the system to top left
     // TODO: insert the trajectory as the full screen mat here...
     //cv::Mat mat_out(mat.rows, mat.cols, mat.type(), cv::Scalar(0));
-    cv::Mat mat_out = mat_active;
-    cv::resize(mat_history, mat_history, cv::Size(214, 160), 0, 0, cv::INTER_LINEAR);
-    mat_history.copyTo(mat_out(cv::Rect(0, 0, mat_history.cols, mat_history.rows)));
-
-    // Tell the feature database to delete old features
-    database->cleanup();
+    // cv::Mat mat_out = mat_history;
+    //cv::resize(mat_history, mat_history, cv::Size(214, 160), 0, 0, cv::INTER_LINEAR);
+    //mat_history.copyTo(mat_out(cv::Rect(0, 0, mat_history.cols, mat_history.rows)));
 
     // Display framerate
-    int total_time_ms = (int) (totalTime * 1000);
-    cv::putText(mat_out, std::to_string(total_time_ms) + "ms", cv::Point(mat_out.cols - 150, 30),
+    //std::string str = std::to_string((int) (totalTime * 1000)) + "ms";
+    std::string str = std::to_string((int) (viz_track_rate)) + "hz";
+    cv::putText(mat_out, str, cv::Point(mat_out.cols - 150, 30),
                 cv::FONT_HERSHEY_COMPLEX_SMALL, 1.5, cv::Scalar(0, 255, 0), 2);
     cv::putText(mat_out, ((is_recording) ? "recording" : "waiting"),
                 cv::Point(mat_out.cols - 150, 60), cv::FONT_HERSHEY_COMPLEX_SMALL, 1.5,
@@ -232,6 +296,7 @@ Java_com_openvins_android_MainActivity_processInertialJNI(JNIEnv *env, jobject i
     // Record the current timestamp (is there a better way?)
     unsigned long long time_in_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::system_clock::now().time_since_epoch()).count();
+    double time_in_sec = 1e-9 * (double) time_in_ns;
 
     // Cast to our native type
     double n_ax = static_cast<double>(ax);
@@ -249,6 +314,63 @@ Java_com_openvins_android_MainActivity_processInertialJNI(JNIEnv *env, jobject i
         __android_log_print(ANDROID_LOG_INFO, TAG,
                             "%.4f, %.4f, %.4f | %.4f, %.4f, %.4f \n", n_ax, n_ay, n_az, n_gx, n_gy,
                             n_gz);
+    }
+
+    // Feed if the system is running!
+    if (sys != nullptr) {
+
+        // Send it into the system
+        ov_core::ImuData message_imu;
+        message_imu.timestamp = time_in_sec;
+        message_imu.wm << n_gx, n_gy, n_gz;
+        message_imu.am << n_ax, n_ay, n_az;
+        sys->feed_measurement_imu(message_imu);
+
+        // If the processing queue is currently active / running just return so we can keep getting measurements
+        // Otherwise create a second thread to do our update in an async manor
+        // The visualization of the state, images, and features will be synchronous with the update!
+        if (!thread_update_running) {
+            thread_update_running = true;
+            std::thread thread([&] {
+                // Lock on the queue (prevents new images from appending)
+                std::lock_guard<std::mutex> lck(camera_queue_mtx);
+
+                // Count how many unique image streams
+                std::map<int, bool> unique_cam_ids;
+                for (const auto &cam_msg: camera_queue) {
+                    unique_cam_ids[cam_msg.sensor_ids.at(0)] = true;
+                }
+
+                // If we do not have enough unique cameras then we need to wait
+                // We should wait till we have one of each camera to ensure we propagate in the correct order
+                auto params = sys->get_params();
+                size_t num_unique_cameras = 1; // params.state_options.num_cameras
+                if (unique_cam_ids.size() == num_unique_cameras) {
+
+                    // Loop through our queue and see if we are able to process any of our camera measurements
+                    // We are able to process if we have at least one IMU measurement greater than the camera time
+                    double timestamp_imu_inC =
+                            time_in_sec - sys->get_state()->_calib_dt_CAMtoIMU->value()(0);
+                    while (!camera_queue.empty() &&
+                           camera_queue.at(0).timestamp < timestamp_imu_inC) {
+                        auto rT0_1 = boost::posix_time::microsec_clock::local_time();
+                        double update_dt =
+                                100.0 * (timestamp_imu_inC - camera_queue.at(0).timestamp);
+                        sys->feed_measurement_camera(camera_queue.at(0));
+                        //visualize();
+                        camera_queue.pop_front();
+                        auto rT0_2 = boost::posix_time::microsec_clock::local_time();
+                        double time_total = (rT0_2 - rT0_1).total_microseconds() * 1e-6;
+                        PRINT_ERROR("[TIME]: %.4f seconds total (%.1f hz, %.2f ms behind)\n",
+                                    time_total, 1.0 / time_total, update_dt);
+                        viz_track_rate = 1.0 / time_total;
+                    }
+                }
+                thread_update_running = false;
+            });
+            thread.detach();
+        }
+
     }
 
 }

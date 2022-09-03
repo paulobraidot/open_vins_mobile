@@ -8,6 +8,13 @@ cmake_minimum_required(VERSION 3.18.1)
 # Declares and names the project.
 project("android")
 
+if(ANDROID_ABI STREQUAL armeabi-v7a)
+    set_target_properties(${TARGET} PROPERTIES COMPILE_FLAGS -mfpu=neon)
+endif()
+if(ANDROID_ABI STREQUAL arm64-v8a)
+    set_target_properties(${TARGET} PROPERTIES COMPILE_FLAGS -mfpu=neon)
+endif()
+
 # Include OpenCV project
 include_directories(${OpenCV_DIR}/jni/include)
 add_library(lib_opencv SHARED IMPORTED)
@@ -28,6 +35,9 @@ add_library(boost_date_time SHARED IMPORTED)
 set_target_properties(boost_date_time PROPERTIES IMPORTED_LOCATION ${BOOST_DIR}/libs/${ANDROID_ABI}/libboost_date_time.so)
 add_library(boost_chrono SHARED IMPORTED)
 set_target_properties(boost_chrono PROPERTIES IMPORTED_LOCATION ${BOOST_DIR}/libs/${ANDROID_ABI}/libboost_chrono.so)
+
+# Enable compile optimizations
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -fsee -fomit-frame-pointer -fno-signed-zeros -fno-math-errno -funroll-loops")
 
 # Include OpenVINS project and list the source files
 include_directories(
