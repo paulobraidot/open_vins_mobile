@@ -217,6 +217,38 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
         params.record_timing_information = false;
         params.record_timing_filepath = "ov_msckf_timing.txt";
 
+        //=====================================================
+        // Camera settings
+        //=====================================================
+
+        // Time offset
+        params.calib_camimu_dt = 0.0;
+
+        // Distortion parameters
+        Eigen::VectorXd cam_calib = Eigen::VectorXd::Zero(8);
+        cam_calib << 508.46260595099653, 508.60809677235125, 313.90116337712436, 239.12131316575451,
+                    0.06825356240204992, -0.13805574171283572, -0.001705523739596709, -0.003549022763988628;
+        cam_calib(0) /= (params.downsample_cameras) ? 2.0 : 1.0;
+        cam_calib(1) /= (params.downsample_cameras) ? 2.0 : 1.0;
+        cam_calib(2) /= (params.downsample_cameras) ? 2.0 : 1.0;
+        cam_calib(3) /= (params.downsample_cameras) ? 2.0 : 1.0;
+
+        // FOV / resolution
+        std::pair<int, int> wh(640, 480);
+        wh.first /= (params.downsample_cameras) ? 2.0 : 1.0;
+        wh.second /= (params.downsample_cameras) ? 2.0 : 1.0;
+
+        // Extrinsics
+        Eigen::Matrix4d T_CtoI = Eigen::Matrix4d::Identity();
+        Eigen::Matrix<double, 7, 1> cam_eigen;
+        cam_eigen.block(0, 0, 4, 1) = ov_core::rot_2_quat(T_CtoI.block(0, 0, 3, 3).transpose());
+        cam_eigen.block(4, 0, 3, 1) = -T_CtoI.block(0, 0, 3, 3).transpose() * T_CtoI.block(0, 3, 3, 1);
+
+        // Create intrinsics model
+        params.camera_intrinsics[0] = std::make_shared<ov_core::CamRadtan>(wh.first, wh.second);
+        params.camera_intrinsics[0]->set_value(cam_calib);
+        params.camera_extrinsics[0] = cam_eigen;
+
         // Ensure we read in all parameters required, create the VIO manager
         if (!parser->successful()) {
             //PRINT_ERROR(RED "[SERIAL]: unable to parse all parameters, please fix\n" RESET);

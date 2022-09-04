@@ -1,0 +1,36 @@
+
+
+
+
+
+docker build -t kalibr -f Dockerfile_ros1_20_04 .
+
+sudo apt install x11-xserver-utils
+
+export DISPLAY=$(grep nameserver /etc/resolv.conf | awk '{print $2}'):0.0
+
+
+FOLDER=/mnt/d/OPEN_VINS/DATA
+xhost +local:root
+docker run -it -e "DISPLAY" -e "QT_X11_NO_MITSHM=1" \
+    -v "/tmp/.X11-unix:/tmp/.X11-unix:rw" \
+    -v "$FOLDER:/data" kalibr
+
+
+source devel/setup.bash
+rosrun kalibr kalibr_bagcreater \
+    --folder /data/2021-01-19_14-16-56/. \
+    --output /data/2021-01-19_14-16-56.bag
+
+rosbag info /data/2021-01-19_14-16-56.bag
+
+rosrun kalibr kalibr_calibrate_cameras \
+    --bag /data/2021-01-19_14-16-56.bag \
+    --target /data/april_6x6_80x80cm.yaml \
+    --bag-freq 10 \
+    --dont-show-report \
+    --models pinhole-radtan \
+    --topics /cam0/image_raw
+
+
+
