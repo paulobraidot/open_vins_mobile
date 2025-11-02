@@ -82,9 +82,10 @@ const double MAX_CAMERA_AGE_SECONDS = 0.5; // Skip measurements older than 500ms
 //=========================================================
 
 // Visualization data files
-double viz_rate = 20.0;
+double viz_rate = 10.0;
 double viz_time = -1.0;
 double viz_track_rate = 0.0;
+double viz_track_last_time = -1.0; // Track last processing timestamp for rate calculation
 cv::Mat viz_image;
 std::string viz_state1 = "";
 std::string viz_state2 = "";
@@ -132,33 +133,31 @@ void processing_worker_thread() {
             continue;
         }
         
-        // Lock camera queue and process measurements
-        std::lock_guard<std::mutex> cam_lck(camera_queue_mtx);
+        // Calculate IMU timestamp in camera frame (outside lock since sys is thread-safe)
+        double timestamp_imu_inC = current_imu_timestamp - sys->get_state()->_calib_dt_CAMtoIMU->value()(0);
         
-        // Count how many unique image streams
-        std::map<int, bool> unique_cam_ids;
-        for (const auto &cam_msg: camera_queue) {
-            unique_cam_ids[cam_msg.sensor_ids.at(0)] = true;
-        }
+        // Get current time to check if measurements are too old
+        unsigned long long time_now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        double time_now_sec = 1e-9 * (double) time_now_ns;
         
-        auto params = sys->get_params();
-        size_t num_unique_cameras = 1; // params.state_options.num_cameras
-        
-        if (unique_cam_ids.size() == num_unique_cameras && !camera_queue.empty()) {
-            // Calculate IMU timestamp in camera frame
-            double timestamp_imu_inC = current_imu_timestamp - sys->get_state()->_calib_dt_CAMtoIMU->value()(0);
+        // Process camera measurements that are ready and not too old
+        while (true) {
+            // Time the queue operations
+            auto t_queue_start = boost::posix_time::microsec_clock::local_time();
             
-            // Get current time to check if measurements are too old
-            unsigned long long time_now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::system_clock::now().time_since_epoch()).count();
-            double time_now_sec = 1e-9 * (double) time_now_ns;
-            
-            // Process camera measurements that are ready and not too old
-            while (!camera_queue.empty()) {
-                const auto& cam_msg = camera_queue.at(0);
+            // Lock to check, copy, and pop the front element
+            ov_core::CameraData cam_msg;
+            bool has_message = false;
+            size_t queue_size_after_pop = 0;
+            {
+                std::lock_guard<std::mutex> cam_lck(camera_queue_mtx);
+                if (camera_queue.empty()) {
+                    break;
+                }
                 
                 // Check if measurement is too old (falling behind realtime)
-                double age_seconds = time_now_sec - cam_msg.timestamp;
+                double age_seconds = time_now_sec - camera_queue.at(0).timestamp;
                 if (age_seconds > MAX_CAMERA_AGE_SECONDS) {
                     __android_log_print(ANDROID_LOG_WARN, TAG, 
                         "Skipping old camera measurement: %.3f seconds old\n", age_seconds);
@@ -167,45 +166,82 @@ void processing_worker_thread() {
                 }
                 
                 // Only process if IMU timestamp is newer than camera timestamp
-                if (cam_msg.timestamp >= timestamp_imu_inC) {
+                if (camera_queue.at(0).timestamp >= timestamp_imu_inC) {
+                    // Log when waiting for IMU data
+                    double imu_wait = camera_queue.at(0).timestamp - timestamp_imu_inC;
+                    __android_log_print(ANDROID_LOG_DEBUG, TAG, "Waiting for IMU: cam_ts=%.4f, imu_ts=%.4f, diff=%.4f, queue_size=%zu\n",
+                                      camera_queue.at(0).timestamp, timestamp_imu_inC, imu_wait, camera_queue.size());
                     break; // Wait for more IMU data
                 }
                 
-                // Process this camera measurement
-                auto rT0_1 = boost::posix_time::microsec_clock::local_time();
-                double update_dt = 100.0 * (timestamp_imu_inC - cam_msg.timestamp);
-                
-                sys->feed_measurement_camera(cam_msg);
+                // Copy and pop while holding the lock
+                cam_msg = camera_queue.at(0);
                 camera_queue.pop_front();
-                
-                auto rT0_2 = boost::posix_time::microsec_clock::local_time();
-                double time_total = (rT0_2 - rT0_1).total_microseconds() * 1e-6;
-                PRINT_ERROR("[TIME]: %.4f seconds total (%.1f hz, %.2f ms behind)\n",
-                            time_total, 1.0 / time_total, update_dt);
-                
-                // Update visualization stuff
-                viz_track_rate = 1.0 / time_total;
-                auto state = sys->get_state();
-                auto q = state->_imu->quat();
-                auto p = state->_imu->pos();
-                
-                // Store trajectory point
-                {
-                    std::lock_guard<std::mutex> traj_lck(trajectory_mtx);
-                    trajectory_history.emplace_back(p(0), p(1), p(2), q(0), q(1), q(2), q(3));
-                    if (trajectory_history.size() > MAX_TRAJECTORY_POINTS) {
-                        trajectory_history.erase(trajectory_history.begin());
-                    }
-                }
-                
-                std::stringstream ss1, ss2;
-                ss1 << std::fixed << std::setprecision(3);
-                ss1 << "q = " << q(0) << "," << q(1) << "," << q(2) << "," << q(3);
-                ss2 << std::fixed << std::setprecision(2);
-                ss2 << "p = " << p(0) << "," << p(1) << "," << p(2);
-                viz_state1 = ss1.str();
-                viz_state2 = ss2.str();
+                queue_size_after_pop = camera_queue.size();
+                has_message = true;
             }
+            
+            auto t_queue_end = boost::posix_time::microsec_clock::local_time();
+            double time_queue = (t_queue_end - t_queue_start).total_microseconds() * 1e-6;
+            
+            // Log when we start processing a frame (queue draining)
+            __android_log_print(ANDROID_LOG_INFO, TAG, "Processing frame, queue size after pop = %zu\n", queue_size_after_pop);
+            
+            if (!has_message) {
+                break;
+            }
+            
+            // Process this camera measurement (lock is released during this call)
+            auto t_feed_start = boost::posix_time::microsec_clock::local_time();
+            double update_dt = 100.0 * (timestamp_imu_inC - cam_msg.timestamp);
+            sys->feed_measurement_camera(cam_msg);
+            auto t_feed_end = boost::posix_time::microsec_clock::local_time();
+            double time_feed = (t_feed_end - t_feed_start).total_microseconds() * 1e-6;
+            
+            // Time state retrieval
+            auto t_state_start = boost::posix_time::microsec_clock::local_time();
+            auto state = sys->get_state();
+            auto q = state->_imu->quat();
+            auto p = state->_imu->pos();
+            auto t_state_end = boost::posix_time::microsec_clock::local_time();
+            double time_state = (t_state_end - t_state_start).total_microseconds() * 1e-6;
+            
+            // Update visualization stuff
+            // Calculate actual processing rate based on time between consecutive frames
+            auto t_viz_start = boost::posix_time::microsec_clock::local_time();
+            double current_time = cam_msg.timestamp;
+            if (viz_track_last_time > 0.0) {
+                double time_delta = current_time - viz_track_last_time;
+                if (time_delta > 0.0) {
+                    viz_track_rate = 1.0 / time_delta;
+                }
+            }
+            viz_track_last_time = current_time;
+            
+            // Store trajectory point
+            {
+                std::lock_guard<std::mutex> traj_lck(trajectory_mtx);
+                trajectory_history.emplace_back(p(0), p(1), p(2), q(0), q(1), q(2), q(3));
+                if (trajectory_history.size() > MAX_TRAJECTORY_POINTS) {
+                    trajectory_history.erase(trajectory_history.begin());
+                }
+            }
+            
+            std::stringstream ss1, ss2;
+            ss1 << std::fixed << std::setprecision(3);
+            ss1 << "q = " << q(0) << "," << q(1) << "," << q(2) << "," << q(3);
+            ss2 << std::fixed << std::setprecision(2);
+            ss2 << "p = " << p(0) << "," << p(1) << "," << p(2);
+            viz_state1 = ss1.str();
+            viz_state2 = ss2.str();
+            auto t_viz_end = boost::posix_time::microsec_clock::local_time();
+            double time_viz = (t_viz_end - t_viz_start).total_microseconds() * 1e-6;
+            
+            // Calculate total time and log breakdown
+            auto t_total_end = boost::posix_time::microsec_clock::local_time();
+            double time_total = (t_total_end - t_queue_start).total_microseconds() * 1e-6;
+            PRINT_ERROR("[TIME]: %.4f total (%.1f hz, %.2f ms behind) | queue=%.4f | feed=%.4f | state=%.4f | viz=%.4f\n",
+                        time_total, 1.0 / time_total, update_dt, time_queue, time_feed, time_state, time_viz);
         }
     }
     
@@ -297,6 +333,7 @@ Java_com_openvins_android_MainActivity_toggleSystemJNI(JNIEnv *env, jobject inst
         // Reset visualization state
         viz_time = -1;
         viz_track_rate = 0.0;
+        viz_track_last_time = -1.0;
         viz_state1 = "";
         viz_state2 = "";
         
@@ -325,6 +362,7 @@ Java_com_openvins_android_MainActivity_toggleSystemJNI(JNIEnv *env, jobject inst
         // Reset visualization state
         viz_time = -1;
         viz_track_rate = 0.0;
+        viz_track_last_time = -1.0;
         viz_state1 = "";
         viz_state2 = "";
         
@@ -390,7 +428,7 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
         params.grid_x = 3;
         params.grid_y = 3;
         params.min_px_dist = 20;
-        params.track_frequency = 30.0;
+        params.track_frequency = 31.0;
         //params.retri_active_features = false; // removed?
         params.state_options.do_fej = true;
         params.state_options.imu_avg = true;
@@ -461,9 +499,27 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
         // See if the message should be dropped / skipped
         int cam_id0 = 0;
         double time_delta = 1.0 / sys->get_params().track_frequency;
-        if(camera_last_timestamp.find(cam_id0) == camera_last_timestamp.end() ||
-            time_in_sec > camera_last_timestamp.at(cam_id0) + time_delta) {
-
+        bool should_queue = camera_last_timestamp.find(cam_id0) == camera_last_timestamp.end() ||
+                            time_in_sec > camera_last_timestamp.at(cam_id0) + time_delta;
+        
+        // Calculate inter-frame interval for logging
+        double frame_delta = 0.0;
+        double expected_frame_rate = 0.0;
+        if (camera_last_timestamp.find(cam_id0) != camera_last_timestamp.end()) {
+            frame_delta = time_in_sec - camera_last_timestamp.at(cam_id0);
+            if (frame_delta > 0.0) {
+                expected_frame_rate = 1.0 / frame_delta;
+            }
+        }
+        
+        if (!should_queue && frame_delta > 0.0) {
+            // Frame dropped due to throttling (too soon after last frame)
+            __android_log_print(ANDROID_LOG_DEBUG, TAG, "Frame DROPPED: delta=%.4f sec (%.1f Hz) < threshold=%.4f sec\n",
+                              frame_delta, expected_frame_rate, time_delta);
+        }
+        
+        if (should_queue) {
+            
             // Record the time we will append the queue
             camera_last_timestamp[cam_id0] = time_in_sec;
 
@@ -479,7 +535,11 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
                 std::lock_guard<std::mutex> lck(camera_queue_mtx);
                 camera_queue.push_back(message);
                 std::sort(camera_queue.begin(), camera_queue.end());
-                __android_log_print(ANDROID_LOG_INFO, TAG, "SIZE CAMERA QUEUE = %zu\n", camera_queue.size());
+                __android_log_print(ANDROID_LOG_INFO, TAG, "SIZE CAMERA QUEUE = %zu", camera_queue.size());
+                if (frame_delta > 0.0) {
+                    __android_log_print(ANDROID_LOG_INFO, TAG, " | frame_delta=%.4f sec (%.1f Hz)", frame_delta, expected_frame_rate);
+                }
+                __android_log_print(ANDROID_LOG_INFO, TAG, "\n");
             }
             
             // Notify the worker thread that new camera data is available
