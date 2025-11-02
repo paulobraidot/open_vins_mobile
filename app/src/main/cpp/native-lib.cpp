@@ -35,7 +35,7 @@
 #include "utils/opencv_yaml_parse.h"
 #include "utils/sensor_data.h"
 
-#define TAG "OVLIB"
+#define TAG "OpenVINSNative"
 
 bool is_recording = false;
 bool is_running_ov = false;
@@ -191,7 +191,7 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
         params.grid_y = 3;
         params.min_px_dist = 20;
         params.track_frequency = 30.0;
-        params.retri_active_features = false;
+        //params.retri_active_features = false; // removed? NOCHECKIN
         params.state_options.do_fej = true;
         params.state_options.imu_avg = true;
         params.state_options.use_rk4_integration = false; // seems to be very slow!

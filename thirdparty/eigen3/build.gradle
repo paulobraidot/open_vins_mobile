@@ -7,7 +7,8 @@ def eigen3VersionCode = ((3 * 100 + 3) * 100 + 9) * 10 + 0
 println "Eigen3: " +eigen3VersionName + " " + project.buildscript.sourceFile
 
 android {
-    compileSdkVersion 30
+    namespace "com.thirdparty.eigen3"
+    compileSdk 30
 
     defaultConfig {
         minSdkVersion 21

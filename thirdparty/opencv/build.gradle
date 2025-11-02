@@ -96,7 +96,13 @@ def openCVersionCode = ((4 * 100 + 5) * 100 + 1) * 10 + 0
 println "OpenCV: " +openCVersionName + " " + project.buildscript.sourceFile
 
 android {
-    compileSdkVersion 30
+    namespace "org.opencv"
+    compileSdk 30
+
+    buildFeatures {
+        buildConfig true
+        aidl true
+    }
 
     defaultConfig {
         minSdkVersion 21
@@ -115,13 +121,17 @@ android {
 
     buildTypes {
         debug {
-            packagingOptions {
-                doNotStrip '**/*.so'  // controlled by OpenCV CMake scripts
+            packaging {
+                jniLibs {
+                    keepDebugSymbols += '**/*.so'  // controlled by OpenCV CMake scripts
+                }
             }
         }
         release {
-            packagingOptions {
-                doNotStrip '**/*.so'  // controlled by OpenCV CMake scripts
+            packaging {
+                jniLibs {
+                    keepDebugSymbols += '**/*.so'  // controlled by OpenCV CMake scripts
+                }
             }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.txt'
@@ -150,4 +160,9 @@ android {
 }
 
 dependencies {
+}
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(8)
+    }
 }

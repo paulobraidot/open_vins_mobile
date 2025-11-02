@@ -7,7 +7,8 @@ def boostVersionCode = ((1 * 100 + 72) * 100 + 0) * 10 + 0
 println "Boost: " +boostVersionName + " " + project.buildscript.sourceFile
 
 android {
-    compileSdkVersion 30
+    namespace "com.thirdparty.boost"
+    compileSdk 30
 
     defaultConfig {
         minSdkVersion 21
@@ -19,13 +20,17 @@ android {
 
     buildTypes {
         debug {
-            packagingOptions {
-                doNotStrip '**/*.so'  // controlled by OpenCV CMake scripts
+            packaging {
+                jniLibs {
+                    keepDebugSymbols += '**/*.so'  // controlled by OpenCV CMake scripts
+                }
             }
         }
         release {
-            packagingOptions {
-                doNotStrip '**/*.so'  // controlled by OpenCV CMake scripts
+            packaging {
+                jniLibs {
+                    keepDebugSymbols += '**/*.so'  // controlled by OpenCV CMake scripts
+                }
             }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.txt'

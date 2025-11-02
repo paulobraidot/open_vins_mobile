@@ -68,6 +68,13 @@ list(APPEND ov_core_sources
         # ov_init
         open_vins/ov_init/src/init/InertialInitializer.cpp
         open_vins/ov_init/src/static/StaticInitializer.cpp
+        # Note: DynamicInitializer and ceres files are excluded on Android since Ceres Solver is not available
+        # If Ceres is added later, uncomment these lines:
+        # open_vins/ov_init/src/dynamic/DynamicInitializer.cpp
+        # open_vins/ov_init/src/ceres/Factor_GenericPrior.cpp
+        # open_vins/ov_init/src/ceres/Factor_ImageReprojCalib.cpp
+        # open_vins/ov_init/src/ceres/Factor_ImuCPIv1.cpp
+        # open_vins/ov_init/src/ceres/State_JPLQuatLocal.cpp
         # ov_msckf
         open_vins/ov_msckf/src/core/VioManager.cpp
         open_vins/ov_msckf/src/core/VioManagerHelper.cpp

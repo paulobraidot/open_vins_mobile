@@ -4,8 +4,8 @@ plugins {
 }
 
 android {
-    compileSdkVersion 30
-    buildToolsVersion "30.0.2"
+    namespace "com.openvins.android"
+    compileSdk 30
 
     defaultConfig {
         applicationId "com.openvins.android"
@@ -36,7 +36,6 @@ android {
     externalNativeBuild {
         cmake {
             path "src/main/cpp/CMakeLists.txt"
-            version "3.18.1"
         }
     }
     compileOptions {
