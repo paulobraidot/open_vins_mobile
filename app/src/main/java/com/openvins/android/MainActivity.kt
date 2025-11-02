@@ -28,6 +28,8 @@ import org.opencv.android.OpenCVLoader
 import org.opencv.core.CvType
 import org.opencv.core.Mat
 import java.io.File
+import android.os.Handler
+import android.os.Looper
 
 
 class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventListener {
@@ -44,6 +46,15 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
     private var sensorGyro: Sensor? = null
     private var eventAccel: SensorEvent? = null
     private var eventGyro: SensorEvent? = null
+    
+    private var trajectoryView: Trajectory3DView? = null
+    private val trajectoryUpdateHandler = Handler(Looper.getMainLooper())
+    private val trajectoryUpdateRunnable = object : Runnable {
+        override fun run() {
+            updateTrajectoryView()
+            trajectoryUpdateHandler.postDelayed(this, 50) // 20 Hz
+        }
+    }
 
     private val mLoaderCallback = object : BaseLoaderCallback(this) {
         override fun onManagerConnected(status: Int) {
@@ -85,6 +96,11 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
         setContentView(R.layout.activity_main)
         mOpenCvCameraView = findViewById<View>(R.id.test_view) as JavaCamResView
         mOpenCvCameraView!!.setCvCameraViewListener(this)
+        
+        // Setup trajectory view
+        trajectoryView = findViewById<Trajectory3DView>(R.id.trajectory_view)
+        // Force initial render to show axes and grid
+        trajectoryView?.forceRender()
         //mOpenCvCameraView!!.setMaxFrameSize(640, 480)
         //mOpenCvCameraView!!.setFocusMode(this, Camera.Parameters.FOCUS_MODE_INFINITY)
 
@@ -169,6 +185,8 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
                 false
             } else {
                 reset.setImageResource(R.drawable.ic_stop_system)
+                // Clear trajectory view when starting (in case there was leftover data)
+                trajectoryView?.clearTrajectory()
                 true
             }
             toggleSystemJNI(isRunningOV)
@@ -201,6 +219,7 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
         super.onPause()
         if (mOpenCvCameraView != null) mOpenCvCameraView!!.disableView()
         sensorManager.unregisterListener(this)
+        trajectoryUpdateHandler.removeCallbacks(trajectoryUpdateRunnable)
     }
 
     public override fun onResume() {
@@ -226,6 +245,9 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
                 SensorManager.SENSOR_DELAY_GAME
             ) //SENSOR_DELAY_FASTEST
         }
+        
+        // Start trajectory updates
+        trajectoryUpdateHandler.post(trajectoryUpdateRunnable)
     }
 
     public override fun onDestroy() {
@@ -292,6 +314,55 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
         ax: Float, ay: Float, az: Float,
         gx: Float, gy: Float, gz: Float
     )
+    private external fun getCurrentPoseJNI(position: DoubleArray, quaternion: DoubleArray): Boolean
+    // Combined function: returns number of points copied (0 on error/empty)
+    // Arrays must be pre-allocated with sufficient size (max_size * 3 for positions, max_size * 4 for quaternions)
+    private external fun getTrajectoryDataJNI(positions: DoubleArray, quaternions: DoubleArray): Int
+    
+    private fun updateTrajectoryView() {
+        if (trajectoryView == null) return
+        
+        // Get current pose
+        val currentPos = DoubleArray(3)
+        val currentQuat = DoubleArray(4)
+        if (!getCurrentPoseJNI(currentPos, currentQuat)) {
+            return // System not initialized
+        }
+        
+        // Allocate arrays with maximum expected size (MAX_TRAJECTORY_POINTS = 10000)
+        // The native function will return the actual number of points copied
+        val maxSize = 10000
+        val positions = DoubleArray(maxSize * 3)
+        val quaternions = DoubleArray(maxSize * 4)
+        
+        // Get trajectory data atomically (size and data in one call)
+        // This prevents race conditions where size could change between separate calls
+        val trajectorySize = getTrajectoryDataJNI(positions, quaternions)
+        
+        if (trajectorySize == 0) {
+            // Empty trajectory or error
+            trajectoryView?.updateTrajectory(floatArrayOf(), floatArrayOf(), 
+                FloatArray(3) { currentPos[it].toFloat() }, 
+                FloatArray(4) { currentQuat[it].toFloat() })
+            return
+        }
+        
+        // Convert only the actual number of points to float arrays
+        val posFloats = FloatArray(trajectorySize * 3)
+        val quatFloats = FloatArray(trajectorySize * 4)
+        for (i in 0 until trajectorySize * 3) {
+            posFloats[i] = positions[i].toFloat()
+        }
+        for (i in 0 until trajectorySize * 4) {
+            quatFloats[i] = quaternions[i].toFloat()
+        }
+        
+        val currPosFloats = FloatArray(3) { currentPos[it].toFloat() }
+        val currQuatFloats = FloatArray(4) { currentQuat[it].toFloat() }
+        
+        // Update the 3D view
+        trajectoryView?.updateTrajectory(posFloats, quatFloats, currPosFloats, currQuatFloats)
+    }
 
     companion object {
         private const val TAG = "MainActivity"

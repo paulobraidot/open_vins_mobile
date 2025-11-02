@@ -21,17 +21,22 @@ class JavaCamResView(context: Context?, attrs: AttributeSet?) : JavaCameraView(c
 
         // Set the focus mode to either infinity or fixed
         val params: Camera.Parameters = mCamera.getParameters()
-//        if (params.supportedFocusModes.contains(Camera.Parameters.FOCUS_MODE_FIXED))
-//            params.focusMode = Camera.Parameters.FOCUS_MODE_FIXED
-//        else if (params.supportedFocusModes.contains(Camera.Parameters.FOCUS_MODE_INFINITY))
-//            params.focusMode = Camera.Parameters.FOCUS_MODE_INFINITY
+        
+        // Try to set focus to infinity first, then fixed as fallback
+        if (params.supportedFocusModes.contains(Camera.Parameters.FOCUS_MODE_INFINITY)) {
+            params.focusMode = Camera.Parameters.FOCUS_MODE_INFINITY
+            Log.d("JavaCamResView", "Focus mode set to INFINITY")
+        } else if (params.supportedFocusModes.contains(Camera.Parameters.FOCUS_MODE_FIXED)) {
+            params.focusMode = Camera.Parameters.FOCUS_MODE_FIXED
+            Log.d("JavaCamResView", "Focus mode set to FIXED")
+        } else {
+            Log.w("JavaCamResView", "Neither INFINITY nor FIXED focus modes are supported. Available modes: ${params.supportedFocusModes}")
+            // Keep auto if neither is available (though this shouldn't happen on most cameras)
+        }
 
         // Limit the exposure
         params.setAutoExposureLock(false)
         params.exposureCompensation = -10
-        //params.autoExposureLock = true
-        //params.focusMode = Camera.Parameters.FOCUS_MODE_FIXED
-        params.focusMode = Camera.Parameters.FOCUS_MODE_AUTO
 
         // Finally write our parameters
         mCamera.setParameters(params)

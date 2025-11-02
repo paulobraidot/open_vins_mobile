@@ -14,6 +14,8 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <condition_variable>
+#include <atomic>
 
 #include <opencv2/core/core.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
@@ -51,8 +53,16 @@ std::ofstream imu_csv;
 // Master VIO system :)
 std::shared_ptr<ov_msckf::VioManager> sys = nullptr;
 
-// Thread atomics
-std::atomic<bool> thread_update_running(false);
+// Persistent worker thread for processing camera measurements
+std::thread processing_thread;
+std::atomic<bool> thread_should_run(false);
+std::atomic<bool> thread_running(false);
+std::mutex processing_mtx;
+std::condition_variable processing_cv;
+
+// Latest IMU timestamp (for determining which camera measurements can be processed)
+double latest_imu_timestamp = 0.0;
+std::mutex imu_timestamp_mtx;
 
 // Queue up camera measurements sorted by time and trigger once we have
 // exactly one IMU measurement with timestamp newer than the camera measurement
@@ -63,6 +73,9 @@ std::mutex camera_queue_mtx;
 
 // Last camera message timestamps we have received (mapped by cam id)
 std::map<int, double> camera_last_timestamp;
+
+// Maximum age (in seconds) for camera measurements before skipping
+const double MAX_CAMERA_AGE_SECONDS = 0.5; // Skip measurements older than 500ms
 
 //=========================================================
 // OPENVINS SPECIFIC VARS - END
@@ -75,6 +88,130 @@ double viz_track_rate = 0.0;
 cv::Mat viz_image;
 std::string viz_state1 = "";
 std::string viz_state2 = "";
+
+// Trajectory storage for 3D visualization
+struct TrajectoryPoint {
+    double x, y, z;
+    double qw, qx, qy, qz;
+    TrajectoryPoint(double x_, double y_, double z_, double qw_, double qx_, double qy_, double qz_)
+        : x(x_), y(y_), z(z_), qw(qw_), qx(qx_), qy(qy_), qz(qz_) {}
+};
+std::vector<TrajectoryPoint> trajectory_history;
+std::mutex trajectory_mtx;
+const size_t MAX_TRAJECTORY_POINTS = 10000; // Limit trajectory size
+
+// Worker thread function that continuously processes camera measurements
+void processing_worker_thread() {
+    __android_log_print(ANDROID_LOG_INFO, TAG, "Processing worker thread started\n");
+    thread_running = true;
+    
+    while (thread_should_run) {
+        {
+            std::unique_lock<std::mutex> proc_lck(processing_mtx);
+            
+            // Wait for either new data or shutdown signal
+            // Timeout after 100ms to periodically check if we should exit
+            processing_cv.wait_for(proc_lck, std::chrono::milliseconds(100), [&] {
+                return !thread_should_run;
+            });
+        } // Release lock before processing
+        
+        if (!thread_should_run) {
+            break;
+        }
+        
+        // Get latest IMU timestamp
+        double current_imu_timestamp;
+        {
+            std::lock_guard<std::mutex> imu_lck(imu_timestamp_mtx);
+            current_imu_timestamp = latest_imu_timestamp;
+        }
+        
+        // Check if we have a valid system and IMU timestamp
+        if (sys == nullptr || current_imu_timestamp <= 0.0) {
+            continue;
+        }
+        
+        // Lock camera queue and process measurements
+        std::lock_guard<std::mutex> cam_lck(camera_queue_mtx);
+        
+        // Count how many unique image streams
+        std::map<int, bool> unique_cam_ids;
+        for (const auto &cam_msg: camera_queue) {
+            unique_cam_ids[cam_msg.sensor_ids.at(0)] = true;
+        }
+        
+        auto params = sys->get_params();
+        size_t num_unique_cameras = 1; // params.state_options.num_cameras
+        
+        if (unique_cam_ids.size() == num_unique_cameras && !camera_queue.empty()) {
+            // Calculate IMU timestamp in camera frame
+            double timestamp_imu_inC = current_imu_timestamp - sys->get_state()->_calib_dt_CAMtoIMU->value()(0);
+            
+            // Get current time to check if measurements are too old
+            unsigned long long time_now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            double time_now_sec = 1e-9 * (double) time_now_ns;
+            
+            // Process camera measurements that are ready and not too old
+            while (!camera_queue.empty()) {
+                const auto& cam_msg = camera_queue.at(0);
+                
+                // Check if measurement is too old (falling behind realtime)
+                double age_seconds = time_now_sec - cam_msg.timestamp;
+                if (age_seconds > MAX_CAMERA_AGE_SECONDS) {
+                    __android_log_print(ANDROID_LOG_WARN, TAG, 
+                        "Skipping old camera measurement: %.3f seconds old\n", age_seconds);
+                    camera_queue.pop_front();
+                    continue;
+                }
+                
+                // Only process if IMU timestamp is newer than camera timestamp
+                if (cam_msg.timestamp >= timestamp_imu_inC) {
+                    break; // Wait for more IMU data
+                }
+                
+                // Process this camera measurement
+                auto rT0_1 = boost::posix_time::microsec_clock::local_time();
+                double update_dt = 100.0 * (timestamp_imu_inC - cam_msg.timestamp);
+                
+                sys->feed_measurement_camera(cam_msg);
+                camera_queue.pop_front();
+                
+                auto rT0_2 = boost::posix_time::microsec_clock::local_time();
+                double time_total = (rT0_2 - rT0_1).total_microseconds() * 1e-6;
+                PRINT_ERROR("[TIME]: %.4f seconds total (%.1f hz, %.2f ms behind)\n",
+                            time_total, 1.0 / time_total, update_dt);
+                
+                // Update visualization stuff
+                viz_track_rate = 1.0 / time_total;
+                auto state = sys->get_state();
+                auto q = state->_imu->quat();
+                auto p = state->_imu->pos();
+                
+                // Store trajectory point
+                {
+                    std::lock_guard<std::mutex> traj_lck(trajectory_mtx);
+                    trajectory_history.emplace_back(p(0), p(1), p(2), q(0), q(1), q(2), q(3));
+                    if (trajectory_history.size() > MAX_TRAJECTORY_POINTS) {
+                        trajectory_history.erase(trajectory_history.begin());
+                    }
+                }
+                
+                std::stringstream ss1, ss2;
+                ss1 << std::fixed << std::setprecision(3);
+                ss1 << "q = " << q(0) << "," << q(1) << "," << q(2) << "," << q(3);
+                ss2 << std::fixed << std::setprecision(2);
+                ss2 << "p = " << p(0) << "," << p(1) << "," << p(2);
+                viz_state1 = ss1.str();
+                viz_state2 = ss2.str();
+            }
+        }
+    }
+    
+    thread_running = false;
+    __android_log_print(ANDROID_LOG_INFO, TAG, "Processing worker thread stopped\n");
+}
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_openvins_android_MainActivity_setAppFolderJNI(JNIEnv *env, jobject instance, jstring dir) {
@@ -127,12 +264,76 @@ Java_com_openvins_android_MainActivity_toggleSystemJNI(JNIEnv *env, jobject inst
                                                        jboolean stateAddr) {
     is_running_ov = (bool) stateAddr;
     if(!is_running_ov) {
-        std::lock_guard<std::mutex> lck(camera_queue_mtx);
-        sys = nullptr;
+        // Stop the system: shutdown immediately
+        __android_log_print(ANDROID_LOG_INFO, TAG, "Stopping OpenVINS system...\n");
+        
+        // Stop the worker thread
+        if (thread_running) {
+            thread_should_run = false;
+            processing_cv.notify_all();
+            
+            // Wait for thread to finish (with timeout)
+            if (processing_thread.joinable()) {
+                processing_thread.join();
+            }
+        }
+        
+        // Set sys to nullptr - this signals shutdown to all threads
+        // Shared_ptr will automatically destroy VioManager when last reference is released
+        {
+            std::lock_guard<std::mutex> lck(camera_queue_mtx);
+            sys = nullptr;
+            // Clear queues immediately
+            camera_queue.clear();
+            camera_last_timestamp.clear();
+        }
+        
+        // Reset IMU timestamp
+        {
+            std::lock_guard<std::mutex> imu_lck(imu_timestamp_mtx);
+            latest_imu_timestamp = 0.0;
+        }
+        
+        // Reset visualization state
         viz_time = -1;
         viz_track_rate = 0.0;
         viz_state1 = "";
         viz_state2 = "";
+        
+        __android_log_print(ANDROID_LOG_INFO, TAG, "OpenVINS system stopped\n");
+    } else {
+        // Starting the system: ensure clean state
+        __android_log_print(ANDROID_LOG_INFO, TAG, "Starting OpenVINS system...\n");
+        
+        // Clear trajectory and queues
+        {
+            std::lock_guard<std::mutex> traj_lck(trajectory_mtx);
+            trajectory_history.clear();
+        }
+        {
+            std::lock_guard<std::mutex> lck(camera_queue_mtx);
+            camera_queue.clear();
+            camera_last_timestamp.clear();
+        }
+        
+        // Reset IMU timestamp
+        {
+            std::lock_guard<std::mutex> imu_lck(imu_timestamp_mtx);
+            latest_imu_timestamp = 0.0;
+        }
+        
+        // Reset visualization state
+        viz_time = -1;
+        viz_track_rate = 0.0;
+        viz_state1 = "";
+        viz_state2 = "";
+        
+        // Start the worker thread
+        if (!thread_running) {
+            thread_should_run = true;
+            processing_thread = std::thread(processing_worker_thread);
+            __android_log_print(ANDROID_LOG_INFO, TAG, "Processing worker thread started\n");
+        }
     }
 }
 
@@ -163,7 +364,6 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
 
     // Return if the app folder has not been set yet
     if (!app_folder_set) {
-        //__android_log_print(ANDROID_LOG_INFO, TAG, "here 0");
         return;
     }
 
@@ -184,14 +384,14 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
         params.use_klt = true;
         params.use_aruco = false;
         params.use_stereo = false;
-        params.downsample_cameras = false;
+        params.downsample_cameras = false; // why no work?
         params.num_opencv_threads = 1;
-        params.num_pts = 100;
+        params.num_pts = 200;
         params.grid_x = 3;
         params.grid_y = 3;
         params.min_px_dist = 20;
         params.track_frequency = 30.0;
-        //params.retri_active_features = false; // removed? NOCHECKIN
+        //params.retri_active_features = false; // removed?
         params.state_options.do_fej = true;
         params.state_options.imu_avg = true;
         params.state_options.use_rk4_integration = false; // seems to be very slow!
@@ -199,9 +399,9 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
         params.state_options.do_calib_camera_intrinsics = true;
         params.state_options.do_calib_camera_timeoffset = true;
         params.state_options.max_clone_size = 8;
-        params.state_options.max_slam_features = 10;
-        params.state_options.max_slam_in_update = 20;
-        params.state_options.max_msckf_in_update = 20;
+        params.state_options.max_slam_features = 25;
+        params.state_options.max_slam_in_update = 25;
+        params.state_options.max_msckf_in_update = 50;
         params.state_options.num_cameras = 1;
         params.init_options.init_dyn_use = false;
         params.init_options.init_max_features = 25;
@@ -224,19 +424,11 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
         // Time offset
         params.calib_camimu_dt = 0.0;
 
-        // Distortion parameters
+        // FOV / resolution + Intrinsics + Distortion parameters
+        std::pair<int, int> wh(640, 480);
         Eigen::VectorXd cam_calib = Eigen::VectorXd::Zero(8);
         cam_calib << 508.46260595099653, 508.60809677235125, 313.90116337712436, 239.12131316575451,
                     0.06825356240204992, -0.13805574171283572, -0.001705523739596709, -0.003549022763988628;
-        cam_calib(0) /= (params.downsample_cameras) ? 2.0 : 1.0;
-        cam_calib(1) /= (params.downsample_cameras) ? 2.0 : 1.0;
-        cam_calib(2) /= (params.downsample_cameras) ? 2.0 : 1.0;
-        cam_calib(3) /= (params.downsample_cameras) ? 2.0 : 1.0;
-
-        // FOV / resolution
-        std::pair<int, int> wh(640, 480);
-        wh.first /= (params.downsample_cameras) ? 2.0 : 1.0;
-        wh.second /= (params.downsample_cameras) ? 2.0 : 1.0;
 
         // Extrinsics
         Eigen::Matrix4d T_CtoI = Eigen::Matrix4d::Identity();
@@ -283,9 +475,15 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
             message.masks.push_back(cv::Mat::zeros(mat_gray.rows, mat_gray.cols, CV_8UC1));
 
             // Append it to our queue of images
-            std::lock_guard<std::mutex> lck(camera_queue_mtx);
-            camera_queue.push_back(message);
-            std::sort(camera_queue.begin(), camera_queue.end());
+            {
+                std::lock_guard<std::mutex> lck(camera_queue_mtx);
+                camera_queue.push_back(message);
+                std::sort(camera_queue.begin(), camera_queue.end());
+                __android_log_print(ANDROID_LOG_INFO, TAG, "SIZE CAMERA QUEUE = %zu\n", camera_queue.size());
+            }
+            
+            // Notify the worker thread that new camera data is available
+            processing_cv.notify_one();
         }
     }
 
@@ -393,63 +591,87 @@ Java_com_openvins_android_MainActivity_processInertialJNI(JNIEnv *env, jobject i
         message_imu.am << n_ax, n_ay, n_az;
         sys->feed_measurement_imu(message_imu);
 
-        // If the processing queue is currently active / running just return so we can keep getting measurements
-        // Otherwise create a second thread to do our update in an async manor
-        // The visualization of the state, images, and features will be synchronous with the update!
-        if (!thread_update_running) {
-            thread_update_running = true;
-            std::thread thread([&] {
-                // Lock on the queue (prevents new images from appending)
-                std::lock_guard<std::mutex> lck(camera_queue_mtx);
-
-                // Count how many unique image streams
-                std::map<int, bool> unique_cam_ids;
-                for (const auto &cam_msg: camera_queue) {
-                    unique_cam_ids[cam_msg.sensor_ids.at(0)] = true;
-                }
-
-                // If we do not have enough unique cameras then we need to wait
-                // We should wait till we have one of each camera to ensure we propagate in the correct order
-                auto params = sys->get_params();
-                size_t num_unique_cameras = 1; // params.state_options.num_cameras
-                if (unique_cam_ids.size() == num_unique_cameras) {
-
-                    // Loop through our queue and see if we are able to process any of our camera measurements
-                    // We are able to process if we have at least one IMU measurement greater than the camera time
-                    double timestamp_imu_inC =
-                            time_in_sec - sys->get_state()->_calib_dt_CAMtoIMU->value()(0);
-                    while (!camera_queue.empty() &&
-                           camera_queue.at(0).timestamp < timestamp_imu_inC) {
-                        auto rT0_1 = boost::posix_time::microsec_clock::local_time();
-                        double update_dt =
-                                100.0 * (timestamp_imu_inC - camera_queue.at(0).timestamp);
-                        sys->feed_measurement_camera(camera_queue.at(0));
-                        //visualize();
-                        camera_queue.pop_front();
-                        auto rT0_2 = boost::posix_time::microsec_clock::local_time();
-                        double time_total = (rT0_2 - rT0_1).total_microseconds() * 1e-6;
-                        PRINT_ERROR("[TIME]: %.4f seconds total (%.1f hz, %.2f ms behind)\n",
-                                    time_total, 1.0 / time_total, update_dt);
-
-                        // Update vizualization stuff here
-                        viz_track_rate = 1.0 / time_total;
-                        auto state = sys->get_state();
-                        auto q = state->_imu->quat();
-                        auto p = state->_imu->quat();
-                        std::stringstream ss1, ss2;
-                        ss1 << std::fixed << std::setprecision(3);
-                        ss1 << "q = " << q(0) << "," << q(1) << "," << q(2) << "," << q(3);
-                        ss2 << std::fixed << std::setprecision(2);
-                        ss2 << "p = " << p(0) << "," << p(1) << "," << p(2);
-                        viz_state1 = ss1.str();
-                        viz_state2 = ss2.str();
-                    }
-                }
-                thread_update_running = false;
-            });
-            thread.detach();
+        // Update the latest IMU timestamp (worker thread will poll for this)
+        {
+            std::lock_guard<std::mutex> imu_lck(imu_timestamp_mtx);
+            latest_imu_timestamp = time_in_sec;
         }
 
     }
 
+}
+
+// JNI functions for trajectory visualization
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_openvins_android_MainActivity_getCurrentPoseJNI(JNIEnv *env, jobject instance,
+                                                        jdoubleArray position,
+                                                        jdoubleArray quaternion) {
+    if (sys == nullptr || !is_running_ov) {
+        return JNI_FALSE;
+    }
+    
+    auto state = sys->get_state();
+    if (state == nullptr) {
+        return JNI_FALSE;
+    }
+    
+    auto q = state->_imu->quat();
+    auto p = state->_imu->pos();
+    
+    jdouble pos[3] = {p(0), p(1), p(2)};
+    jdouble quat[4] = {q(0), q(1), q(2), q(3)};
+    
+    env->SetDoubleArrayRegion(position, 0, 3, pos);
+    env->SetDoubleArrayRegion(quaternion, 0, 4, quat);
+    
+    return JNI_TRUE;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_openvins_android_MainActivity_getTrajectoryDataJNI(JNIEnv *env, jobject instance,
+                                                            jdoubleArray positions,
+                                                            jdoubleArray quaternions) {
+    std::lock_guard<std::mutex> lck(trajectory_mtx);
+    
+    size_t size = trajectory_history.size();
+    if (size == 0) {
+        return 0;
+    }
+    
+    // Check array sizes
+    jsize pos_size = env->GetArrayLength(positions);
+    jsize quat_size = env->GetArrayLength(quaternions);
+    
+    jsize required_pos_size = static_cast<jsize>(size * 3);
+    jsize required_quat_size = static_cast<jsize>(size * 4);
+    
+    if (pos_size < required_pos_size || quat_size < required_quat_size) {
+        // Arrays too small - return 0 to indicate error
+        // Java side should allocate larger arrays
+        return 0;
+    }
+    
+    jdouble *pos_array = env->GetDoubleArrayElements(positions, nullptr);
+    jdouble *quat_array = env->GetDoubleArrayElements(quaternions, nullptr);
+    
+    if (pos_array == nullptr || quat_array == nullptr) {
+        return 0;
+    }
+    
+    // Copy trajectory data
+    for (size_t i = 0; i < size; i++) {
+        pos_array[i * 3 + 0] = trajectory_history[i].x;
+        pos_array[i * 3 + 1] = trajectory_history[i].y;
+        pos_array[i * 3 + 2] = trajectory_history[i].z;
+        
+        quat_array[i * 4 + 0] = trajectory_history[i].qw;
+        quat_array[i * 4 + 1] = trajectory_history[i].qx;
+        quat_array[i * 4 + 2] = trajectory_history[i].qy;
+        quat_array[i * 4 + 3] = trajectory_history[i].qz;
+    }
+    
+    env->ReleaseDoubleArrayElements(positions, pos_array, 0);
+    env->ReleaseDoubleArrayElements(quaternions, quat_array, 0);
+    
+    return static_cast<jint>(size);
 }
