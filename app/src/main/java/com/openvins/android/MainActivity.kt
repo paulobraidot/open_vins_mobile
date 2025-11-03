@@ -20,22 +20,14 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import com.google.android.material.floatingactionbutton.FloatingActionButton
-import org.opencv.android.BaseLoaderCallback
-import org.opencv.android.CameraBridgeViewBase.CvCameraViewFrame
-import org.opencv.android.CameraBridgeViewBase.CvCameraViewListener2
-import org.opencv.android.LoaderCallbackInterface
-import org.opencv.android.OpenCVLoader
-import org.opencv.core.CvType
-import org.opencv.core.Mat
 import java.io.File
 import android.os.Handler
 import android.os.Looper
 
 
-class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventListener {
+class MainActivity : AppCompatActivity(), CameraFrameListener, SensorEventListener {
 
-    private var mOpenCvCameraView: JavaCamResView? = null
-    private var mGrayMat: Mat? = null
+    private var mOpenCvCameraView: Camera2ResView? = null
     private var isRecording: Boolean = false
     private var isRunningOV: Boolean = false
     private var hasRecordFolder: Boolean = false
@@ -56,25 +48,9 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
         }
     }
 
-    private val mLoaderCallback = object : BaseLoaderCallback(this) {
-        override fun onManagerConnected(status: Int) {
-            when (status) {
-                LoaderCallbackInterface.SUCCESS -> {
-
-                    // Load native library after(!) OpenCV initialization
-                    Log.i(TAG, "Loading native library")
-                    System.loadLibrary("native-lib")
-
-                    // We are good, so activate our camera feed
-                    Log.i(TAG, "OpenCV loaded successfully")
-                    mOpenCvCameraView!!.enableView()
-
-                }
-                else -> {
-                    super.onManagerConnected(status)
-                }
-            }
-        }
+    init {
+        // Load native library
+        System.loadLibrary("native-lib")
     }
 
     public override fun onCreate(savedInstanceState: Bundle?) {
@@ -94,8 +70,8 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
 
         // Setup our camera
         setContentView(R.layout.activity_main)
-        mOpenCvCameraView = findViewById<View>(R.id.test_view) as JavaCamResView
-        mOpenCvCameraView!!.setCvCameraViewListener(this)
+        mOpenCvCameraView = findViewById<View>(R.id.test_view) as Camera2ResView
+        mOpenCvCameraView!!.setCameraFrameListener(this)
         
         // Setup trajectory view
         trajectoryView = findViewById<Trajectory3DView>(R.id.trajectory_view)
@@ -224,13 +200,9 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
 
     public override fun onResume() {
         super.onResume()
-        if (!OpenCVLoader.initDebug()) {
-            Log.d(TAG, "Internal OpenCV library not found. Using OpenCV Manager for initialization")
-            OpenCVLoader.initAsync(OpenCVLoader.OPENCV_VERSION, this, mLoaderCallback)
-        } else {
-            Log.d(TAG, "OpenCV library found inside package. Using it!")
-            mLoaderCallback.onManagerConnected(LoaderCallbackInterface.SUCCESS)
-        }
+        // Activate camera feed
+        mOpenCvCameraView!!.enableView()
+        
         sensorAccel?.also { sensor ->
             sensorManager.registerListener(
                 this,
@@ -255,23 +227,10 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
         if (mOpenCvCameraView != null) mOpenCvCameraView!!.disableView()
     }
 
-    override fun onCameraViewStarted(width: Int, height: Int) {
-        mGrayMat = Mat(height, width, CvType.CV_8UC1)
-    }
-
-    override fun onCameraViewStopped() {
-        mGrayMat!!.release()
-    }
-
-    override fun onCameraFrame(inputFrame: CvCameraViewFrame): Mat {
-        // get current camera frame as OpenCV Mat object
-        val mat = inputFrame.rgba()
-
-        // native call to process current camera frame
-        processImageJNI(mat.nativeObjAddr)
-
-        // return processed frame for live preview
-        return mat
+    override fun onFrame(matAddr: Long, timestampSec: Double) {
+        // Native function processes the frame and updates it in-place
+        // Mat address is already from native code, so we can use it directly
+        processImageJNI(matAddr, timestampSec)
     }
 
     override fun onSensorChanged(event: SensorEvent?) {
@@ -292,9 +251,13 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
         // TODO: we should try to be smarter about this selection as they could be
         // TODO: out of sync and we should never know this...
         if (eventAccel != null && eventGyro != null) {
+            // Use the sensor event timestamp (nanoseconds since boot, converted to seconds)
+            // This ensures consistent timing with camera timestamps which also use boot time reference
+            val timestampSec = (event!!.timestamp * 1e-9).toDouble()
             processInertialJNI(
                 eventAccel!!.values[0], eventAccel!!.values[1], eventAccel!!.values[2],
-                eventGyro!!.values[0], eventGyro!!.values[1], eventGyro!!.values[2]
+                eventGyro!!.values[0], eventGyro!!.values[1], eventGyro!!.values[2],
+                timestampSec
             );
             eventAccel = null;
             eventGyro = null;
@@ -309,10 +272,11 @@ class MainActivity : AppCompatActivity(), CvCameraViewListener2, SensorEventList
     private external fun setAppFolderJNI(dir: String)
     private external fun setRecordStateJNI(state: Boolean)
     private external fun toggleSystemJNI(state: Boolean)
-    private external fun processImageJNI(matAddr: Long)
+    private external fun processImageJNI(matAddr: Long, timestampSec: Double)
     private external fun processInertialJNI(
         ax: Float, ay: Float, az: Float,
-        gx: Float, gy: Float, gz: Float
+        gx: Float, gy: Float, gz: Float,
+        timestampSec: Double
     )
     private external fun getCurrentPoseJNI(position: DoubleArray, quaternion: DoubleArray): Boolean
     // Combined function: returns number of points copied (0 on error/empty)

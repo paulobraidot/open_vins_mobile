@@ -1,6 +1,7 @@
 #include <jni.h>
 #include <android/log.h>
 #include <android/asset_manager.h>
+#include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -82,7 +83,7 @@ const double MAX_CAMERA_AGE_SECONDS = 0.5; // Skip measurements older than 500ms
 //=========================================================
 
 // Visualization data files
-double viz_rate = 10.0;
+double viz_rate = 30.0;
 double viz_time = -1.0;
 double viz_track_rate = 0.0;
 double viz_track_last_time = -1.0; // Track last processing timestamp for rate calculation
@@ -136,9 +137,11 @@ void processing_worker_thread() {
         // Calculate IMU timestamp in camera frame (outside lock since sys is thread-safe)
         double timestamp_imu_inC = current_imu_timestamp - sys->get_state()->_calib_dt_CAMtoIMU->value()(0);
         
-        // Get current time to check if measurements are too old
-        unsigned long long time_now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
+        // Get current time in boot time reference (to match camera/IMU timestamps)
+        // Use CLOCK_BOOTTIME to get nanoseconds since boot (same reference as camera/IMU)
+        struct timespec ts;
+        clock_gettime(CLOCK_BOOTTIME, &ts);
+        unsigned long long time_now_ns = (unsigned long long)ts.tv_sec * 1000000000ULL + (unsigned long long)ts.tv_nsec;
         double time_now_sec = 1e-9 * (double) time_now_ns;
         
         // Process camera measurements that are ready and not too old
@@ -376,22 +379,211 @@ Java_com_openvins_android_MainActivity_toggleSystemJNI(JNIEnv *env, jobject inst
 }
 
 
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_openvins_android_Camera2ResView_processYUVToRGBAJNI(
+    JNIEnv *env, jclass clazz,
+    jbyteArray yData,
+    jbyteArray uData,
+    jbyteArray vData,
+    jint width,
+    jint height,
+    jint yStride,
+    jint uStride,
+    jint vStride,
+    jint chromaPixelStride) {
+
+    // This is a helper function to convert YUV to RGBA in native code
+    // Creates Mat in native code and returns its address
+    
+    // Create output Mat in native code
+    cv::Mat *outputMat = new cv::Mat(height, width, CV_8UC4);
+    if (yData == nullptr) {
+        __android_log_print(ANDROID_LOG_ERROR, TAG, "Y plane data is null");
+        return 0;
+    }
+    
+    jsize yLength = env->GetArrayLength(yData);
+    jbyte *yBytes = env->GetByteArrayElements(yData, nullptr);
+    if (chromaPixelStride == 2) {
+        // Interleaved chroma (NV12/NV21)
+        if (uData == nullptr) {
+            __android_log_print(ANDROID_LOG_ERROR, TAG, "UV plane data is null for interleaved format");
+            env->ReleaseByteArrayElements(yData, yBytes, JNI_ABORT);
+            delete outputMat;
+            return 0;
+        }
+        
+        jsize uLength = env->GetArrayLength(uData);
+        jbyte *uBytes = env->GetByteArrayElements(uData, nullptr);
+        
+        // Create Y Mat with stride
+        cv::Mat yMat;
+        if (yStride == width) {
+            // No padding, can use directly
+            yMat = cv::Mat(height, width, CV_8UC1, (void*)yBytes);
+        } else {
+            // Has padding, need to copy row by row
+            yMat = cv::Mat(height, width, CV_8UC1);
+            for (int row = 0; row < height; row++) {
+                memcpy(yMat.ptr(row), yBytes + row * yStride, width);
+            }
+        }
+        
+        // Create UV Mat (UV interleaved, so size is height/2 x width/2 x 2)
+        cv::Mat uvMat;
+        if (uStride == width) {
+            // No padding, can use directly
+            uvMat = cv::Mat(height / 2, width / 2, CV_8UC2, (void*)uBytes);
+        } else {
+            // Has padding, need to copy row by row
+            uvMat = cv::Mat(height / 2, width / 2, CV_8UC2);
+            int uvRowSize = (width / 2) * 2;
+            for (int row = 0; row < height / 2; row++) {
+                memcpy(uvMat.ptr(row), uBytes + row * uStride, uvRowSize);
+            }
+        }
+        
+        // Convert using two-plane conversion (more efficient)
+        // Use NV21 (most common on Android devices)
+        // Note: If colors are inverted, try NV12 instead
+        cv::cvtColorTwoPlane(yMat, uvMat, *outputMat, cv::COLOR_YUV2RGBA_NV21);
+        
+        env->ReleaseByteArrayElements(uData, uBytes, JNI_ABORT);
+    } else {
+        // Non-interleaved chroma (I420)
+        if (uData == nullptr || vData == nullptr) {
+            __android_log_print(ANDROID_LOG_ERROR, TAG, "U or V plane data is null for I420 format");
+            env->ReleaseByteArrayElements(yData, yBytes, JNI_ABORT);
+            delete outputMat;
+            return 0;
+        }
+        
+        jsize uLength = env->GetArrayLength(uData);
+        jsize vLength = env->GetArrayLength(vData);
+        jbyte *uBytes = env->GetByteArrayElements(uData, nullptr);
+        jbyte *vBytes = env->GetByteArrayElements(vData, nullptr);
+        
+        // Create Y Mat
+        cv::Mat yMat;
+        if (yStride == width) {
+            yMat = cv::Mat(height, width, CV_8UC1, (void*)yBytes);
+        } else {
+            yMat = cv::Mat(height, width, CV_8UC1);
+            for (int row = 0; row < height; row++) {
+                memcpy(yMat.ptr(row), yBytes + row * yStride, width);
+            }
+        }
+        
+        // Create U and V Mats
+        cv::Mat uMat, vMat;
+        int chromaWidth = width / 2;
+        int chromaHeight = height / 2;
+        
+        if (uStride == chromaWidth) {
+            uMat = cv::Mat(chromaHeight, chromaWidth, CV_8UC1, (void*)uBytes);
+        } else {
+            uMat = cv::Mat(chromaHeight, chromaWidth, CV_8UC1);
+            for (int row = 0; row < chromaHeight; row++) {
+                memcpy(uMat.ptr(row), uBytes + row * uStride, chromaWidth);
+            }
+        }
+        
+        if (vStride == chromaWidth) {
+            vMat = cv::Mat(chromaHeight, chromaWidth, CV_8UC1, (void*)vBytes);
+        } else {
+            vMat = cv::Mat(chromaHeight, chromaWidth, CV_8UC1);
+            for (int row = 0; row < chromaHeight; row++) {
+                memcpy(vMat.ptr(row), vBytes + row * vStride, chromaWidth);
+            }
+        }
+        
+        // Combine into I420 format: Y + U + V
+        cv::Mat yuvMat(height + chromaHeight, width, CV_8UC1);
+        yMat.copyTo(yuvMat(cv::Rect(0, 0, width, height)));
+        uMat.copyTo(yuvMat(cv::Rect(0, height, chromaWidth, chromaHeight)));
+        vMat.copyTo(yuvMat(cv::Rect(0, height + chromaHeight, chromaWidth, chromaHeight)));
+        
+        // Convert to RGBA
+        cv::cvtColor(yuvMat, *outputMat, cv::COLOR_YUV2RGBA_I420, 4);
+        
+        env->ReleaseByteArrayElements(uData, uBytes, JNI_ABORT);
+        env->ReleaseByteArrayElements(vData, vBytes, JNI_ABORT);
+    }
+    
+    env->ReleaseByteArrayElements(yData, yBytes, JNI_ABORT);
+    
+    // Return Mat address to Java (Java will then call getDisplayImageJNI with this address)
+    return reinterpret_cast<jlong>(outputMat);
+}
+
+// Get display image - returns raw camera if not running, or viz image with overlays if running
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_openvins_android_Camera2ResView_getDisplayImageJNI(JNIEnv *env, jclass clazz,
+                                                             jlong rawCameraMatAddr) {
+    // If not running, just return the raw camera image (converted to RGB)
+    if (!is_running_ov || sys == nullptr) {
+        if (rawCameraMatAddr == 0) {
+            return 0;
+        }
+        
+        cv::Mat &rawMat = *(cv::Mat *) rawCameraMatAddr;
+        // Convert RGBA to RGB for display
+        cv::Mat *rgbMat = new cv::Mat();
+        cv::cvtColor(rawMat, *rgbMat, cv::COLOR_RGBA2RGB);
+        return reinterpret_cast<jlong>(rgbMat);
+    }
+    
+    // System is running - get visualization image with overlays
+    cv::Mat viz_img = sys->get_historical_viz_image();
+    if (viz_img.empty()) {
+        // Fallback to raw camera if no viz image
+        if (rawCameraMatAddr != 0) {
+            cv::Mat &rawMat = *(cv::Mat *) rawCameraMatAddr;
+            cv::Mat *rgbMat = new cv::Mat();
+            cv::cvtColor(rawMat, *rgbMat, cv::COLOR_RGBA2GRAY);
+            return reinterpret_cast<jlong>(rgbMat);
+        }
+        return 0;
+    }
+    
+    // Clone the viz image and apply overlays
+    cv::Mat *displayMat = new cv::Mat(viz_img.clone());
+    
+    // Apply overlays (framerate, recording status, state info)
+    std::string str = std::to_string((int)(viz_track_rate)) + "hz";
+    cv::putText(*displayMat, str, cv::Point(displayMat->cols - 150, 30),
+                cv::FONT_HERSHEY_COMPLEX_SMALL, 1.5, cv::Scalar(0, 255, 0), 2);
+    cv::putText(*displayMat, ((is_recording) ? "recording" : "waiting"),
+                cv::Point(displayMat->cols - 150, 60), cv::FONT_HERSHEY_COMPLEX_SMALL, 1.5,
+                cv::Scalar(0, 255, 0), 2);
+    
+    // Show the current state estimate if we are estimating!
+    if (sys != nullptr && !viz_state1.empty() && !viz_state2.empty()) {
+        cv::putText(*displayMat, viz_state1, cv::Point(10, displayMat->rows - 60),
+                    cv::FONT_HERSHEY_COMPLEX_SMALL, 1.0, cv::Scalar(255, 0, 0), 2);
+        cv::putText(*displayMat, viz_state2, cv::Point(10, displayMat->rows - 30),
+                    cv::FONT_HERSHEY_COMPLEX_SMALL, 1.0, cv::Scalar(255, 0, 0), 2);
+    }
+    
+    return reinterpret_cast<jlong>(displayMat);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject instance,
-                                                       jlong matAddr) {
+                                                       jlong matAddr, jdouble timestampSec) {
 
-    // Record the current timestamp (is there a better way?)
-    unsigned long long time_in_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
-    double time_in_sec = 1e-9 * (double) time_in_ns;
+    // Use the hardware timestamp from Camera2 (nanoseconds since boot, converted to seconds)
+    // This ensures consistent frame-to-frame timing and matches IMU timestamp reference
+    double time_in_sec = timestampSec;
+    unsigned long long time_in_ns = (unsigned long long)(time_in_sec * 1e9);
 
     // get Mat from raw address
     clock_t begin = clock();
     cv::Mat &mat = *(cv::Mat *) matAddr;
 
-    // Convert to gray scale
+    // Convert to gray scale (Mat is RGBA from YUV conversion)
     cv::Mat mat_gray;
-    cv::cvtColor(mat, mat_gray, cv::COLOR_BGR2GRAY);
+    cv::cvtColor(mat, mat_gray, cv::COLOR_RGBA2GRAY);
 
     // If recording save to disk
     if (is_recording) {
@@ -565,63 +757,31 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
     //================================================================
     //================================================================
 
-    // Get updated frame (if no frame, then just display the current)
+    // Update visualization image cache (used by getDisplayImageJNI for overlays)
+    // This is separate from the actual processing - just updating the cache
     if (viz_time == -1 || (time_in_sec - viz_time) > 1.0 / viz_rate) {
         cv::Mat temp_img;
         if(sys != nullptr) {
             temp_img = sys->get_historical_viz_image();
-        } else {
-            viz_image = mat.clone();
         }
         if (!temp_img.empty()) {
             viz_image = temp_img.clone();
             viz_time = time_in_sec;
         }
     }
-    if (viz_image.empty()) {
-        viz_image = mat.clone();
-    }
-    cv::Mat mat_out = viz_image.clone();
-
-    // Resize the display of the system to top left
-    // TODO: insert the trajectory as the full screen mat here...
-    //cv::Mat mat_out(mat.rows, mat.cols, mat.type(), cv::Scalar(0));
-    // cv::Mat mat_out = mat_history;
-    //cv::resize(mat_history, mat_history, cv::Size(214, 160), 0, 0, cv::INTER_LINEAR);
-    //mat_history.copyTo(mat_out(cv::Rect(0, 0, mat_history.cols, mat_history.rows)));
-
-    // Display framerate
-    //std::string str = std::to_string((int) (totalTime * 1000)) + "ms";
-    std::string str = std::to_string((int) (viz_track_rate)) + "hz";
-    cv::putText(mat_out, str, cv::Point(mat_out.cols - 150, 30),
-                cv::FONT_HERSHEY_COMPLEX_SMALL, 1.5, cv::Scalar(0, 255, 0), 2);
-    cv::putText(mat_out, ((is_recording) ? "recording" : "waiting"),
-                cv::Point(mat_out.cols - 150, 60), cv::FONT_HERSHEY_COMPLEX_SMALL, 1.5,
-                cv::Scalar(0, 255, 0), 2);
-
-    // Show the current state estimate if we are estimating!
-    if(sys != nullptr) {
-        cv::putText(mat_out, viz_state1, cv::Point(10, mat_out.rows - 60),
-                cv::FONT_HERSHEY_COMPLEX_SMALL, 1.0, cv::Scalar(255, 0, 0), 2);
-        cv::putText(mat_out, viz_state2, cv::Point(10, mat_out.rows - 30),
-                cv::FONT_HERSHEY_COMPLEX_SMALL, 1.0, cv::Scalar(255, 0, 0), 2);
-    }
-
-    // Finally replace the image that was passed in
-    mat = mat_out.clone();
-
 }
 
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_openvins_android_MainActivity_processInertialJNI(JNIEnv *env, jobject instance,
                                                           jfloat ax, jfloat ay, jfloat az,
-                                                          jfloat gx, jfloat gy, jfloat gz) {
+                                                          jfloat gx, jfloat gy, jfloat gz,
+                                                          jdouble timestampSec) {
 
-    // Record the current timestamp (is there a better way?)
-    unsigned long long time_in_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count();
-    double time_in_sec = 1e-9 * (double) time_in_ns;
+    // Use the hardware timestamp from SensorEvent (nanoseconds since boot, converted to seconds)
+    // This ensures consistent timing and matches camera timestamp reference
+    double time_in_sec = timestampSec;
+    unsigned long long time_in_ns = (unsigned long long)(time_in_sec * 1e9);
 
     // Cast to our native type
     double n_ax = static_cast<double>(ax);
