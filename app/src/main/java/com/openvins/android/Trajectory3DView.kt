@@ -94,9 +94,9 @@ class TrajectoryRenderer : GLSurfaceView.Renderer {
     // azimuth: rotation around vertical axis (full 360 degrees allowed)
     // zoom: zoom factor: 1.0 = default view, >1.0 = zoomed out, <1.0 = zoomed in
     // translateX/Y: translation offset for panning
-    private var elevation = 15f  // Look down at 15 degrees from vertical (almost straight down)
-    private var azimuth = -45f   // Rotation around vertical axis
-    private var zoom = 1.0f      // Zoom factor: 1.0 = default view, >1.0 = zoomed out, <1.0 = zoomed in
+    private var elevation = 55f  // Look down at 35 degrees from vertical
+    private var azimuth = -60f   // Rotation around vertical axis
+    private var zoom = 2.6f      // Zoom factor: 1.0 = default view, >1.0 = zoomed out, <1.0 = zoomed in
     private var translateX = 0f  // Translation in X
     private var translateY = 0f  // Translation in Z (forward/back in OpenGL)
     

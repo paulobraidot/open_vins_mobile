@@ -529,7 +529,7 @@ Java_com_openvins_android_Camera2ResView_getDisplayImageJNI(JNIEnv *env, jclass 
         cv::Mat &rawMat = *(cv::Mat *) rawCameraMatAddr;
         // Convert RGBA to RGB for display
         cv::Mat *rgbMat = new cv::Mat();
-        cv::cvtColor(rawMat, *rgbMat, cv::COLOR_RGBA2RGB);
+        cv::cvtColor(rawMat, *rgbMat, cv::COLOR_RGBA2GRAY);
         return reinterpret_cast<jlong>(rgbMat);
     }
     
