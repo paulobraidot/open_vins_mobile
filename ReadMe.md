@@ -13,12 +13,12 @@ Once in c++ we have a second background thread which is consuming the images and
 1. Clone this repository: `git clone --recurse-submodules https://github.com/goldbattle/open_vins_mobile.git`
 2. Open the cloned folder in Android Studio and "run" / build it and install it on your device
     - This will build both the c++ library, but also the Kotlin java component of it
-    - As a post step, all the things in [data_device/](data_device/) are copied to the private app folder
+    - As a post step, all the things in [app_device/](app_device/) are copied to the private app folder
     - This is where you will update the calibration / yaml config for OpenVINS for the device
 3. You will need to first perform calibration of your device
-    - Follow the guide in [data_kalibr/](data_kalibr/).
+    - Follow the guide in [app_kalibr/](app_kalibr/).
     - You should be able to use the app to record a dataset to disk via the "save" icon
-    - Perform the calibration, and update your device calibration [data_device/](data_device/)
+    - Perform the calibration, and update your device calibration [app_device/](app_device/)
 4. You should now be able to click the "play" button and be able to run OpenVINS
 
 
