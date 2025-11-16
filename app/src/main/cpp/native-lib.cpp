@@ -609,39 +609,11 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
         ov_msckf::VioManagerOptions params;
         params.print_and_load(parser);
 
-        // Override some key parameters we need
+        // Hardcoded parameters
         params.use_multi_threading_subs = true;
-        params.use_klt = true;
-        params.use_aruco = false;
-        params.use_stereo = false;
-        params.downsample_cameras = false; // why no work?
         params.num_opencv_threads = 1;
-        params.num_pts = 200;
-        params.grid_x = 3;
-        params.grid_y = 3;
-        params.min_px_dist = 20;
-        params.track_frequency = 31.0;
-        //params.retri_active_features = false; // removed?
-        params.state_options.do_fej = true;
-        params.state_options.imu_avg = true;
-        params.state_options.use_rk4_integration = false; // seems to be very slow!
-        params.state_options.do_calib_camera_pose = true;
-        params.state_options.do_calib_camera_intrinsics = true;
-        params.state_options.do_calib_camera_timeoffset = true;
-        params.state_options.max_clone_size = 8;
-        params.state_options.max_slam_features = 25;
-        params.state_options.max_slam_in_update = 25;
-        params.state_options.max_msckf_in_update = 50;
-        params.state_options.num_cameras = 1;
-        params.init_options.init_dyn_use = false;
-        params.init_options.init_max_features = 25;
-        params.init_options.init_window_time = 1.0;
-        params.init_options.init_imu_thresh = 0.4;
-        params.init_options.init_max_disparity = 2.0;
+        params.use_aruco = false;
 
-        // Feature triangulation
-        params.featinit_options.triangulate_1d = true;
-        params.featinit_options.refine_features = false;
 
         // Timing stats
         params.record_timing_information = false;
@@ -650,26 +622,6 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
         //=====================================================
         // Camera settings
         //=====================================================
-
-        // Time offset
-        params.calib_camimu_dt = 0.0;
-
-        // FOV / resolution + Intrinsics + Distortion parameters
-        std::pair<int, int> wh(640, 480);
-        Eigen::VectorXd cam_calib = Eigen::VectorXd::Zero(8);
-        cam_calib << 508.46260595099653, 508.60809677235125, 313.90116337712436, 239.12131316575451,
-                    0.06825356240204992, -0.13805574171283572, -0.001705523739596709, -0.003549022763988628;
-
-        // Extrinsics
-        Eigen::Matrix4d T_CtoI = Eigen::Matrix4d::Identity();
-        Eigen::Matrix<double, 7, 1> cam_eigen;
-        cam_eigen.block(0, 0, 4, 1) = ov_core::rot_2_quat(T_CtoI.block(0, 0, 3, 3).transpose());
-        cam_eigen.block(4, 0, 3, 1) = -T_CtoI.block(0, 0, 3, 3).transpose() * T_CtoI.block(0, 3, 3, 1);
-
-        // Create intrinsics model
-        params.camera_intrinsics[0] = std::make_shared<ov_core::CamRadtan>(wh.first, wh.second);
-        params.camera_intrinsics[0]->set_value(cam_calib);
-        params.camera_extrinsics[0] = cam_eigen;
 
         // Ensure we read in all parameters required, create the VIO manager
         if (!parser->successful()) {
