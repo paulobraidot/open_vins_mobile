@@ -242,15 +242,15 @@ class MainActivity : AppCompatActivity(), CameraFrameListener, SensorEventListen
             sensorManager.registerListener(
                 this,
                 sensor,
-                SensorManager.SENSOR_DELAY_GAME
-            ) //SENSOR_DELAY_FASTEST
+                SensorManager.SENSOR_DELAY_FASTEST
+            )
         }
         sensorGyro?.also { sensor ->
             sensorManager.registerListener(
                 this,
                 sensor,
-                SensorManager.SENSOR_DELAY_GAME
-            ) //SENSOR_DELAY_FASTEST
+                SensorManager.SENSOR_DELAY_FASTEST
+            )
         }
         
         // Start trajectory updates
