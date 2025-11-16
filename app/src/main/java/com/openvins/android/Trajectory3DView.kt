@@ -96,7 +96,7 @@ class TrajectoryRenderer : GLSurfaceView.Renderer {
     // translateX/Y: translation offset for panning
     private var elevation = 55f  // Look down at 35 degrees from vertical
     private var azimuth = -60f   // Rotation around vertical axis
-    private var zoom = 2.6f      // Zoom factor: 1.0 = default view, >1.0 = zoomed out, <1.0 = zoomed in
+    private var zoom = 2.0f      // Zoom factor: 1.0 = default view, >1.0 = zoomed out, <1.0 = zoomed in
     private var translateX = 0f  // Translation in X
     private var translateY = 0f  // Translation in Z (forward/back in OpenGL)
     
@@ -120,9 +120,19 @@ class TrajectoryRenderer : GLSurfaceView.Renderer {
     private val modelMatrix = FloatArray(16)
     
     // Orthographic projection parameters
-    private var baseOrthoHeight = 60f
+    private var baseOrthoHeight = 5f  // Base orthographic height in meters (scaled by zoom)
     private var baseOrthoWidth = 60f
     private var screenAspectRatio = 1f
+    
+    // Grid parameters (in meters)
+    private var gridSize = 8f      // Grid extends from -gridSize/2 to +gridSize/2 in both X and Y directions
+    private var gridSpacing = 1.0f   // Spacing between grid lines in meters
+    
+    // Trajectory parameters
+    private var trajectoryLineWidth = 10f  // Line width for trajectory rendering
+    
+    // Axis parameters
+    private var axisLength = 1f  // Length of coordinate axes in meters
     
     // Trajectory line buffers
     private var trajectoryBuffer: FloatBuffer? = null
@@ -175,7 +185,6 @@ class TrajectoryRenderer : GLSurfaceView.Renderer {
         // Calculate aspect ratio of the screen
         screenAspectRatio = width.toFloat() / height.toFloat()
         // Store base orthographic size (will be scaled by zoom in onDrawFrame)
-        baseOrthoHeight = 60f  // Increased to show more of the grid
         baseOrthoWidth = baseOrthoHeight * screenAspectRatio  // Scale width to match aspect ratio
         // Projection matrix will be recalculated each frame based on zoom
         android.util.Log.d("Trajectory3D", "Surface changed: ${width}x${height}, aspect=$screenAspectRatio, base ortho=${baseOrthoWidth}x${baseOrthoHeight}")
@@ -323,7 +332,7 @@ class TrajectoryRenderer : GLSurfaceView.Renderer {
         GLES20.glEnableVertexAttribArray(colorHandle)
         GLES20.glVertexAttribPointer(colorHandle, 4, GLES20.GL_FLOAT, false, 0, trajectoryColorBuffer)
         
-        GLES20.glLineWidth(3f)
+        GLES20.glLineWidth(trajectoryLineWidth)
         GLES20.glDrawArrays(GLES20.GL_LINE_STRIP, 0, trajectoryPointCount)
         
         GLES20.glDisableVertexAttribArray(positionHandle)
@@ -473,7 +482,9 @@ class TrajectoryRenderer : GLSurfaceView.Renderer {
                 currentPosition = currentPos.clone()
             }
             
-            // Convert quaternion for coordinate system (this will need proper quaternion conversion)
+            // Store quaternion - already in Hamilton format [qw, qx, qy, qz] from native code
+            // JPL q_GtoC has same xyzw as Hamilton q_CtoG, native code converts component order
+            // For transforming points from camera to global, we need q_CtoG (which we have)
             currentQuaternion = currentQuat.clone()
             
             updateFrustum()
@@ -482,9 +493,9 @@ class TrajectoryRenderer : GLSurfaceView.Renderer {
     
     private fun updateFrustum() {
         // Create camera frustum at current position/orientation
-        // Frustum dimensions (approximate based on typical camera)
-        val near = 0.1f
-        val far = 2.0f
+        // Frustum dimensions - 3x smaller than before, default to ~20cm size
+        val near = 0.067f  // ~6.7cm (was 0.1f = 10cm)
+        val far = 0.2f     // 20cm (was 2.0f = 2m)
         val fov = 60f * Math.PI.toFloat() / 180f
         val aspect = 1f
         val nearHeight = 2 * near * kotlin.math.tan(fov / 2)
@@ -492,7 +503,7 @@ class TrajectoryRenderer : GLSurfaceView.Renderer {
         val farHeight = 2 * far * kotlin.math.tan(fov / 2)
         val farWidth = farHeight * aspect
         
-        // Frustum corners in camera space (camera looks down +Z)
+        // Frustum corners in camera space (camera looks down +Z in camera frame)
         val corners = floatArrayOf(
             // Near plane
             -nearWidth/2, -nearHeight/2, near,  // bottom-left
@@ -506,11 +517,13 @@ class TrajectoryRenderer : GLSurfaceView.Renderer {
             -farWidth/2, farHeight/2, far
         )
         
-        // Transform corners to world space using quaternion and position
+        // Transform corners from camera space to OpenVINS global space, then convert to OpenGL
+        // q represents camera orientation (Hamilton q_CtoG format: [qw, qx, qy, qz])
         val q = currentQuaternion
-        val p = currentPosition
+        val p_ogl = currentPosition  // Already in OpenGL coordinates
         
-        // Quaternion to rotation matrix (simplified)
+        // Hamilton quaternion to rotation matrix (R_CtoG in OpenVINS coordinates)
+        // q = [qw, qx, qy, qz] where qw is scalar, [qx, qy, qz] is vector
         val qw = q[0]
         val qx = q[1]
         val qy = q[2]
@@ -519,18 +532,34 @@ class TrajectoryRenderer : GLSurfaceView.Renderer {
         val transformedCorners = FloatArray(24) // 8 corners * 3
         
         for (i in 0 until 8) {
-            val x = corners[i * 3]
-            val y = corners[i * 3 + 1]
-            val z = corners[i * 3 + 2]
+            val x_cam = corners[i * 3]      // Camera space X
+            val y_cam = corners[i * 3 + 1]  // Camera space Y
+            val z_cam = corners[i * 3 + 2]  // Camera space Z
             
-            // Rotate
-            val rx = (1 - 2*qy*qy - 2*qz*qz) * x + (2*qx*qy - 2*qz*qw) * y + (2*qx*qz + 2*qy*qw) * z
-            val ry = (2*qx*qy + 2*qz*qw) * x + (1 - 2*qx*qx - 2*qz*qz) * y + (2*qy*qz - 2*qx*qw) * z
-            val rz = (2*qx*qz - 2*qy*qw) * x + (2*qy*qz + 2*qx*qw) * y + (1 - 2*qx*qx - 2*qy*qy) * z
+            // Rotate from camera space to OpenVINS global space using R_CtoG
+            // q = [qw, qx, qy, qz] represents rotation (JPL q_GtoC = Hamilton q_CtoG)
+            // Standard Hamilton quaternion to rotation matrix formula for R_CtoG
+            // This rotates vectors from camera frame to global frame
+            val rx_ov = (1 - 2*qy*qy - 2*qz*qz) * x_cam + 2*(qx*qy - qz*qw) * y_cam + 2*(qx*qz + qy*qw) * z_cam
+            val ry_ov = 2*(qx*qy + qz*qw) * x_cam + (1 - 2*qx*qx - 2*qz*qz) * y_cam + 2*(qy*qz - qx*qw) * z_cam
+            val rz_ov = 2*(qx*qz - qy*qw) * x_cam + 2*(qy*qz + qx*qw) * y_cam + (1 - 2*qx*qx - 2*qy*qy) * z_cam
             
-            transformedCorners[i * 3] = rx + p[0]
-            transformedCorners[i * 3 + 1] = ry + p[1]
-            transformedCorners[i * 3 + 2] = rz + p[2]
+            // Get camera position in OpenVINS coordinates (convert from OpenGL)
+            // OpenGL -> OpenVINS: (X, Y, Z) -> (X, -Z, Y)
+            val px_ov = p_ogl[0]   // X stays same
+            val py_ov = -p_ogl[2]  // OpenGL Z -> OpenVINS -Y
+            val pz_ov = p_ogl[1]    // OpenGL Y -> OpenVINS Z
+            
+            // Translate to camera position in OpenVINS coordinates
+            val rx_ov_world = rx_ov + px_ov
+            val ry_ov_world = ry_ov + py_ov
+            val rz_ov_world = rz_ov + pz_ov
+            
+            // Convert from OpenVINS to OpenGL coordinates
+            // OpenVINS -> OpenGL: (X, Y, Z) -> (X, Z, -Y)
+            transformedCorners[i * 3] = rx_ov_world        // X stays same
+            transformedCorners[i * 3 + 1] = rz_ov_world    // OpenVINS Z -> OpenGL Y (up)
+            transformedCorners[i * 3 + 2] = -ry_ov_world   // OpenVINS Y -> OpenGL -Z (forward)
         }
         
         // Create frustum lines (12 edges: 4 near, 4 far, 4 connecting)
@@ -598,10 +627,9 @@ class TrajectoryRenderer : GLSurfaceView.Renderer {
     }
     
     private fun initializeAxis() {
-        // Draw coordinate axes at origin - make them longer and more visible (5 meters each)
+        // Draw coordinate axes at origin
         // Right-handed coordinate system: X=right, Y=forward, Z=up
         // OpenGL left-handed conversion: X->X, Y->-Z, Z->Y
-        val axisLength = 5f
         val axisVertices = floatArrayOf(
             // X axis (red) - right, no conversion needed
             0f, 0f, 0f, axisLength, 0f, 0f,
@@ -631,73 +659,76 @@ class TrajectoryRenderer : GLSurfaceView.Renderer {
     }
     
     private fun initializeGrid() {
-        // Create a grid on the X-Y plane (Z=0 in right-handed) with lines every 5 meters
-        // In right-handed: X-Y plane means Z=0, which is the ground plane
-        // In OpenGL conversion: X->X, Y->-Z, Z->Y
-        // So X-Y plane in right-handed becomes X-Z plane in OpenGL (Y=0 in OpenGL)
-        // Grid extends from -50 to +50 meters in both X and Y directions (right-handed)
-        val gridSize = 50f
-        val gridSpacing = 5f
+        // Create a grid on the X-Y plane (Z=0 in OpenVINS right-handed coordinates)
+        // In OpenVINS: X-Y plane means Z=0, which is the ground/gravity-aligned plane
+        // In OpenGL conversion: (X, Y, Z) -> (X, Z, -Y)
+        // So X-Y plane in OpenVINS (Z=0) becomes X-Z plane in OpenGL (Y=0 in OpenGL)
         val gridHalfSize = gridSize / 2f
         
         val gridVertices = mutableListOf<Float>()
         val gridColors = mutableListOf<Float>()
         
-        // Grid color - bright white with good opacity for visibility
-        val gridColor = floatArrayOf(1.0f, 1.0f, 1.0f, 0.8f)
+        // Grid color - bright white with 0.2 opacity
+        val gridColor = floatArrayOf(1.0f, 1.0f, 1.0f, 0.2f)
         val gridColorList = gridColor.toList()
         
-        // Draw lines parallel to X axis (varying Y in right-handed)
-        // Right-handed: (X, Y, Z=0) -> OpenGL: (X, Y=0, -Y)
-        // Then rotate 90 degrees around Y axis for landscape orientation
+        // Draw lines parallel to X axis (varying Y in OpenVINS coordinates)
+        // OpenVINS: (X, Y, Z=0) -> OpenGL: (X, Y=0, -Y)
         var y = -gridHalfSize
         while (y <= gridHalfSize + 0.1f) {
-            // Convert to OpenGL coordinates
-            var x1 = -gridHalfSize
-            var z1 = -y
-            var x2 = gridHalfSize
-            var z2 = -y
+            // Start and end points in OpenVINS coordinates: (X, Y, Z=0)
+            val x1_ov = -gridHalfSize
+            val y1_ov = y
+            val z1_ov = 0f
+            val x2_ov = gridHalfSize
+            val y2_ov = y
+            val z2_ov = 0f
             
-            // Rotate 90 degrees around Y axis for landscape: (x, z) -> (-z, x)
-            val rotX1 = -z1
-            val rotZ1 = x1
-            val rotX2 = -z2
-            val rotZ2 = x2
+            // Convert to OpenGL coordinates: (X, Y, Z) -> (X, Z, -Y)
+            val x1_ogl = x1_ov
+            val y1_ogl = z1_ov  // OpenVINS Z -> OpenGL Y
+            val z1_ogl = -y1_ov // OpenVINS Y -> OpenGL -Z
+            val x2_ogl = x2_ov
+            val y2_ogl = z2_ov  // OpenVINS Z -> OpenGL Y
+            val z2_ogl = -y2_ov // OpenVINS Y -> OpenGL -Z
             
-            gridVertices.add(rotX1)
-            gridVertices.add(0f)            // Y in OpenGL (was Z=0 in right-handed)
-            gridVertices.add(rotZ1)
-            gridVertices.add(rotX2)
-            gridVertices.add(0f)            // Y in OpenGL
-            gridVertices.add(rotZ2)
+            gridVertices.add(x1_ogl)
+            gridVertices.add(y1_ogl)
+            gridVertices.add(z1_ogl)
+            gridVertices.add(x2_ogl)
+            gridVertices.add(y2_ogl)
+            gridVertices.add(z2_ogl)
             gridColors.addAll(gridColorList)
             gridColors.addAll(gridColorList)
             y += gridSpacing
         }
         
-        // Draw lines parallel to Y axis (varying X in right-handed)
-        // Right-handed: (X, Y, Z=0) -> OpenGL: (X, Y=0, -Y)
-        // Then rotate 90 degrees around Y axis for landscape orientation
+        // Draw lines parallel to Y axis (varying X in OpenVINS coordinates)
+        // OpenVINS: (X, Y, Z=0) -> OpenGL: (X, Y=0, -Y)
         var x = -gridHalfSize
         while (x <= gridHalfSize + 0.1f) {
-            // Convert to OpenGL coordinates
-            var x1 = x
-            var z1 = gridHalfSize
-            var x2 = x
-            var z2 = -gridHalfSize
+            // Start and end points in OpenVINS coordinates: (X, Y, Z=0)
+            val x1_ov = x
+            val y1_ov = -gridHalfSize
+            val z1_ov = 0f
+            val x2_ov = x
+            val y2_ov = gridHalfSize
+            val z2_ov = 0f
             
-            // Rotate 90 degrees around Y axis for landscape: (x, z) -> (-z, x)
-            val rotX1 = -z1
-            val rotZ1 = x1
-            val rotX2 = -z2
-            val rotZ2 = x2
+            // Convert to OpenGL coordinates: (X, Y, Z) -> (X, Z, -Y)
+            val x1_ogl = x1_ov
+            val y1_ogl = z1_ov  // OpenVINS Z -> OpenGL Y
+            val z1_ogl = -y1_ov // OpenVINS Y -> OpenGL -Z
+            val x2_ogl = x2_ov
+            val y2_ogl = z2_ov  // OpenVINS Z -> OpenGL Y
+            val z2_ogl = -y2_ov // OpenVINS Y -> OpenGL -Z
             
-            gridVertices.add(rotX1)
-            gridVertices.add(0f)            // Y in OpenGL (was Z=0 in right-handed)
-            gridVertices.add(rotZ1)
-            gridVertices.add(rotX2)
-            gridVertices.add(0f)            // Y in OpenGL
-            gridVertices.add(rotZ2)
+            gridVertices.add(x1_ogl)
+            gridVertices.add(y1_ogl)
+            gridVertices.add(z1_ogl)
+            gridVertices.add(x2_ogl)
+            gridVertices.add(y2_ogl)
+            gridVertices.add(z2_ogl)
             gridColors.addAll(gridColorList)
             gridColors.addAll(gridColorList)
             x += gridSpacing

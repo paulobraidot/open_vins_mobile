@@ -1,4 +1,5 @@
 #include <atomic>
+#include <cassert>
 #include <condition_variable>
 #include <errno.h>
 #include <fstream>
@@ -34,6 +35,7 @@
 #include "core/VioManagerOptions.h"
 #include "state/State.h"
 #include "utils/opencv_yaml_parse.h"
+#include "utils/quat_ops.h"
 #include "utils/sensor_data.h"
 
 #define TAG "OpenVINSNative"
@@ -184,8 +186,7 @@ void processing_worker_thread() {
       double time_queue = (t_queue_end - t_queue_start).total_microseconds() * 1e-6;
 
       // Log when we start processing a frame (queue draining)
-      __android_log_print(ANDROID_LOG_INFO, TAG, "Processing frame, queue size after pop = %zu\n", queue_size_after_pop);
-
+      //__android_log_print(ANDROID_LOG_INFO, TAG, "Processing frame, queue size after pop = %zu\n", queue_size_after_pop);
       if (!has_message) {
         break;
       }
@@ -200,8 +201,18 @@ void processing_worker_thread() {
       // Time state retrieval
       auto t_state_start = boost::posix_time::microsec_clock::local_time();
       auto state = sys->get_state();
-      auto q = state->_imu->quat();
-      auto p = state->_imu->pos();
+      auto q_GtoI = state->_imu->quat();
+      auto p_IinG = state->_imu->pos();
+
+      // Transform IMU pose to camera pose using calibration
+      // Get calibration for camera 0 (assuming single camera setup)
+      assert(state->_calib_IMUtoCAM.find(0) != state->_calib_IMUtoCAM.end() && "Camera calibration for camera 0 must exist");
+      auto calib = state->_calib_IMUtoCAM.at(0);
+      Eigen::Vector4d q_ItoC = calib->quat();
+      Eigen::Vector3d p_IinC = calib->pos();
+      Eigen::Vector4d q_cam = ov_core::quat_multiply(q_ItoC, q_GtoI);
+      Eigen::Vector3d p_cam = p_IinG - ov_core::quat_2_Rot(q_cam).transpose() * p_IinC;
+
       auto t_state_end = boost::posix_time::microsec_clock::local_time();
       double time_state = (t_state_end - t_state_start).total_microseconds() * 1e-6;
 
@@ -217,22 +228,25 @@ void processing_worker_thread() {
       }
       viz_track_last_time = current_time;
 
-      // Store trajectory point
-      {
+      // Display things if we have initialized
+      if(sys->initialized()) {
+        // Store trajectory point (camera pose)
+        // q_cam is JPL format [qx, qy, qz, qw], but TrajectoryPoint expects [qw, qx, qy, qz]
         std::lock_guard<std::mutex> traj_lck(trajectory_mtx);
-        trajectory_history.emplace_back(p(0), p(1), p(2), q(0), q(1), q(2), q(3));
+        trajectory_history.emplace_back(p_cam(0), p_cam(1), p_cam(2), q_cam(3), q_cam(0), q_cam(1), q_cam(2));
         if (trajectory_history.size() > MAX_TRAJECTORY_POINTS) {
           trajectory_history.erase(trajectory_history.begin());
         }
-      }
 
-      std::stringstream ss1, ss2;
-      ss1 << std::fixed << std::setprecision(3);
-      ss1 << "q = " << q(0) << "," << q(1) << "," << q(2) << "," << q(3);
-      ss2 << std::fixed << std::setprecision(2);
-      ss2 << "p = " << p(0) << "," << p(1) << "," << p(2);
-      viz_state1 = ss1.str();
-      viz_state2 = ss2.str();
+        // Display the current state
+        std::stringstream ss1, ss2;
+        ss1 << std::fixed << std::setprecision(3);
+        ss1 << "q = " << q_GtoI(0) << "," << q_GtoI(1) << "," << q_GtoI(2) << "," << q_GtoI(3);
+        ss2 << std::fixed << std::setprecision(2);
+        ss2 << "p = " << p_IinG(0) << "," << p_IinG(1) << "," << p_IinG(2);
+        viz_state1 = ss1.str();
+        viz_state2 = ss2.str();
+      }
       auto t_viz_end = boost::posix_time::microsec_clock::local_time();
       double time_viz = (t_viz_end - t_viz_start).total_microseconds() * 1e-6;
 
@@ -627,10 +641,12 @@ extern "C" JNIEXPORT void JNICALL Java_com_openvins_android_MainActivity_process
 
     // Hardcoded parameters
     params.use_multi_threading_subs = true;
-    params.num_opencv_threads = 1;
-    params.use_aruco = false;
+    params.num_opencv_threads = 1; // phones suck
+    params.use_aruco = false; // no extra opencv lib
+    params.init_options.init_dyn_use = false; // no ceres solver lib
 
     // Timing stats
+    // TODO: In the future it would be great to always record this info the dataset folder..
     params.record_timing_information = false;
     params.record_timing_filepath = "ov_msckf_timing.txt";
 
@@ -789,11 +805,25 @@ extern "C" JNIEXPORT jboolean JNICALL Java_com_openvins_android_MainActivity_get
     return JNI_FALSE;
   }
 
-  auto q = state->_imu->quat();
-  auto p = state->_imu->pos();
+  auto q_GtoI = state->_imu->quat();
+  auto p_IinG = state->_imu->pos();
 
-  jdouble pos[3] = {p(0), p(1), p(2)};
-  jdouble quat[4] = {q(0), q(1), q(2), q(3)};
+  // Transform IMU pose to camera pose using calibration
+  assert(state->_calib_IMUtoCAM.find(0) != state->_calib_IMUtoCAM.end() && "Camera calibration for camera 0 must exist");
+  auto calib = state->_calib_IMUtoCAM.at(0);
+  Eigen::Vector4d q_ItoC = calib->quat();
+  Eigen::Vector3d p_IinC = calib->pos();
+  
+  // Compose rotations: q_GtoC = q_ItoC * q_GtoI
+  Eigen::Vector4d q_cam = ov_core::quat_multiply(q_ItoC, q_GtoI);
+  
+  // Transform position: p_CinG = p_IinG - R_GtoC * p_IinC
+  // where R_GtoC = quat_2_Rot(q_GtoC).transpose()
+  Eigen::Vector3d p_cam = p_IinG - ov_core::quat_2_Rot(q_cam).transpose() * p_IinC;
+
+  jdouble pos[3] = {p_cam(0), p_cam(1), p_cam(2)};
+  // Convert JPL [qx, qy, qz, qw] to Hamilton [qw, qx, qy, qz] for Java
+  jdouble quat[4] = {q_cam(3), q_cam(0), q_cam(1), q_cam(2)};
 
   env->SetDoubleArrayRegion(position, 0, 3, pos);
   env->SetDoubleArrayRegion(quaternion, 0, 4, quat);
