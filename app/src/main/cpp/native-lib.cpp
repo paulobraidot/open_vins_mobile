@@ -91,6 +91,7 @@ double viz_track_last_time = -1.0; // Track last processing timestamp for rate c
 cv::Mat viz_image;
 std::string viz_state1 = "";
 std::string viz_state2 = "";
+std::string viz_state3 = "";
 
 // Trajectory storage for 3D visualization
 struct TrajectoryPoint {
@@ -239,13 +240,25 @@ void processing_worker_thread() {
         }
 
         // Display the current state
-        std::stringstream ss1, ss2;
+        std::stringstream ss1, ss2, ss3;
+        // Combine q and p on same line
         ss1 << std::fixed << std::setprecision(3);
         ss1 << "q = " << q_GtoI(0) << "," << q_GtoI(1) << "," << q_GtoI(2) << "," << q_GtoI(3);
-        ss2 << std::fixed << std::setprecision(2);
-        ss2 << "p = " << p_IinG(0) << "," << p_IinG(1) << "," << p_IinG(2);
+        ss1 << "  p = " << std::setprecision(2) << p_IinG(0) << "," << p_IinG(1) << "," << p_IinG(2);
+        
+        // Combine q_c and p_c on same line
+        ss2 << std::fixed << std::setprecision(3);
+        ss2 << "q_c = " << q_ItoC(0) << "," << q_ItoC(1) << "," << q_ItoC(2) << "," << q_ItoC(3);
+        ss2 << "  p_c = " << p_IinC(0) << "," << p_IinC(1) << "," << p_IinC(2);
+        
+        // Camera-IMU time offset (should always be available)
+        assert(state->_calib_dt_CAMtoIMU != nullptr && "Camera-IMU time offset calibration must exist");
+        ss3 << std::fixed << std::setprecision(5);
+        ss3 << "dt = " << state->_calib_dt_CAMtoIMU->value()(0);
+        
         viz_state1 = ss1.str();
         viz_state2 = ss2.str();
+        viz_state3 = ss3.str();
       }
       auto t_viz_end = boost::posix_time::microsec_clock::local_time();
       double time_viz = (t_viz_end - t_viz_start).total_microseconds() * 1e-6;
@@ -356,6 +369,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_openvins_android_MainActivity_toggleS
     viz_track_last_time = -1.0;
     viz_state1 = "";
     viz_state2 = "";
+    viz_state3 = "";
 
     __android_log_print(ANDROID_LOG_INFO, TAG, "OpenVINS system stopped\n");
   } else {
@@ -385,6 +399,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_openvins_android_MainActivity_toggleS
     viz_track_last_time = -1.0;
     viz_state1 = "";
     viz_state2 = "";
+    viz_state3 = "";
 
     // Start the worker thread
     if (!thread_running) {
@@ -571,11 +586,25 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_openvins_android_Camera2ResView_getD
   cv::putText(*displayMat, recording_str, point1, cv::FONT_HERSHEY_COMPLEX_SMALL, 1.5, cv::Scalar(0, 255, 0), 2);
 
   // Show the current state estimate if we are estimating!
-  if (sys != nullptr && !viz_state1.empty() && !viz_state2.empty()) {
-    cv::Point point2(10, displayMat->rows - 60);
-    cv::putText(*displayMat, viz_state1, point2, cv::FONT_HERSHEY_COMPLEX_SMALL, 1.0, cv::Scalar(255, 0, 0), 2);
-    cv::Point point3(10, displayMat->rows - 30);
-    cv::putText(*displayMat, viz_state2, point3, cv::FONT_HERSHEY_COMPLEX_SMALL, 1.0, cv::Scalar(255, 0, 0), 2);
+  // Use smaller font and thinner outline to fit more lines
+  const double font_scale = 0.6;
+  const int font_thickness = 1;
+  const int line_spacing = 18;  // Spacing between lines in pixels
+  
+  if (sys != nullptr && !viz_state1.empty()) {
+    int y_start = displayMat->rows - (line_spacing * 3);  // Start 3 lines from bottom
+    cv::Point point1(10, y_start);
+    cv::putText(*displayMat, viz_state1, point1, cv::FONT_HERSHEY_COMPLEX_SMALL, font_scale, cv::Scalar(255, 0, 0), font_thickness);
+    
+    if (!viz_state2.empty()) {
+      cv::Point point2(10, y_start + line_spacing);
+      cv::putText(*displayMat, viz_state2, point2, cv::FONT_HERSHEY_COMPLEX_SMALL, font_scale, cv::Scalar(255, 0, 0), font_thickness);
+    }
+    
+    if (!viz_state3.empty()) {
+      cv::Point point3(10, y_start + line_spacing * 2);
+      cv::putText(*displayMat, viz_state3, point3, cv::FONT_HERSHEY_COMPLEX_SMALL, font_scale, cv::Scalar(255, 0, 0), font_thickness);
+    }
   }
 
   return reinterpret_cast<jlong>(displayMat);

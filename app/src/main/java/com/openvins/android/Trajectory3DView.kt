@@ -132,7 +132,7 @@ class TrajectoryRenderer : GLSurfaceView.Renderer {
     private var trajectoryLineWidth = 10f  // Line width for trajectory rendering
     
     // Axis parameters
-    private var axisLength = 1f  // Length of coordinate axes in meters
+    private var axisLength = 0.5f  // Length of coordinate axes in meters
     
     // Trajectory line buffers
     private var trajectoryBuffer: FloatBuffer? = null
