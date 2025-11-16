@@ -86,6 +86,7 @@ min_px_dist: 20 # distance between features (features near each other provide le
 knn_ratio: 0.70 # descriptor knn threshold for the top two descriptor matches
 track_frequency: 31.0 # frequency we will perform feature tracking at (in frames per second / hertz)
 downsample_cameras: false # will downsample image in half if true
+num_opencv_threads: 1 # -1: auto, 0-1: serial, >1: number of threads
 histogram_method: "HISTOGRAM" # NONE, HISTOGRAM, CLAHE
 
 # aruco tag tracker for the system
@@ -94,16 +95,21 @@ use_aruco: false
 num_aruco: 1024
 downsize_aruco: true
 
+# try to allow more features, not sure why we have issues triangulating (poor calibration?)
+fi_max_dist: 10.0
+fi_max_baseline: 200
+fi_max_cond_number: 25000
+
 # ==================================================================
 # ==================================================================
 
 # camera noises and chi-squared threshold multipliers
-up_msckf_sigma_px: 1
-up_msckf_chi2_multipler: 1
-up_slam_sigma_px: 1
-up_slam_chi2_multipler: 1
-up_aruco_sigma_px: 1
-up_aruco_chi2_multipler: 1
+up_msckf_sigma_px: 3
+up_msckf_chi2_multipler: 10000
+up_slam_sigma_px: 3
+up_slam_chi2_multipler: 10000
+up_aruco_sigma_px: 3
+up_aruco_chi2_multipler: 10000
 
 # masks for our images
 use_mask: false

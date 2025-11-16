@@ -98,9 +98,45 @@ class MainActivity : AppCompatActivity(), CameraFrameListener, SensorEventListen
         }
 
         // Our open folder button
-        recordFolder =
+        // Use private external files directory root for config (app has full access)
+        // But use public Documents for recordings (user accessible)
+        val appPrivateFolderRoot = getExternalFilesDir(null)?.toString() ?: ""
+        val appRecordFolder =
             Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
                 .toString() + "/openvins/"
+        
+        // Ensure private config directory exists
+        val privateConfigDir = appPrivateFolderRoot + "/config/"
+        File(privateConfigDir).mkdirs()
+        
+        // Config files should be in private directory (pushed by sync script)
+        val privateConfigFile = File(privateConfigDir + "estimator_config.yaml")
+        if (!privateConfigFile.exists()) {
+            Log.w(TAG, "Config files not found in private directory. Please run sync script to push config files.")
+        } else {
+            Log.i(TAG, "Config files found in private directory")
+        }
+        
+        // Use private directory root for config, public directory for recordings
+        recordFolder = appRecordFolder
+        
+        // Automatically set the record folder without showing popup
+        val file = File(recordFolder)
+        if ((!file.isDirectory && !file.mkdirs()) || file.isFile) {
+            Toast.makeText(
+                applicationContext,
+                "ERROR: unable to create directory. ${file.toString()}",
+                Toast.LENGTH_LONG
+            ).show()
+        } else {
+            hasRecordFolder = true
+            // Set recording directory (public, for user access)
+            setAppRecordFolderJNI(recordFolder)
+            // Set private folder root (native code will add /config/ subdirectory)
+            setAppPrivateFolderJNI(appPrivateFolderRoot)
+        }
+
+        // Button for the user to change if they want to do that
         val fab_folder = findViewById(R.id.open_folder) as FloatingActionButton
         fab_folder.setOnClickListener {
             val builder: AlertDialog.Builder = AlertDialog.Builder(this)
@@ -122,7 +158,7 @@ class MainActivity : AppCompatActivity(), CameraFrameListener, SensorEventListen
                         ).show()
                     } else {
                         hasRecordFolder = true
-                        setAppFolderJNI(recordFolder)
+                        setAppRecordFolderJNI(recordFolder)
                     }
                 }
             })
@@ -134,7 +170,6 @@ class MainActivity : AppCompatActivity(), CameraFrameListener, SensorEventListen
             builder.show()
 
         }
-        fab_folder.callOnClick()
 
         // Our record button
         val fab = findViewById(R.id.toggle_record) as FloatingActionButton
@@ -269,7 +304,8 @@ class MainActivity : AppCompatActivity(), CameraFrameListener, SensorEventListen
         Log.d(TAG, "[sensor]: accuracy level of ${p0.toString()} changed to $p1")
     }
 
-    private external fun setAppFolderJNI(dir: String)
+    private external fun setAppRecordFolderJNI(dir: String)
+    private external fun setAppPrivateFolderJNI(dir: String)
     private external fun setRecordStateJNI(state: Boolean)
     private external fun toggleSystemJNI(state: Boolean)
     private external fun processImageJNI(matAddr: Long, timestampSec: Double)

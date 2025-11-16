@@ -20,3 +20,5 @@ thirdparty/opencv/build
 thirdparty/opencv/.cxx
 thirdparty/boost/build
 thirdparty/boost/.cxx
+**/kalibr/**
+app_kalibr/kalibr_repo/

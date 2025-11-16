@@ -77,7 +77,7 @@ task syncDeviceFiles {
         // Check if adb is available
         def adb = android.getAdbExe().toString()
         
-        // Check if device is connected
+        // Check if device is connected and get device ID if multiple
         def devices = new ByteArrayOutputStream()
         def devicesErr = new ByteArrayOutputStream()
         exec {
@@ -88,65 +88,79 @@ task syncDeviceFiles {
         }
         
         def deviceList = devices.toString().trim()
-        if (!deviceList.contains('\tdevice') && !deviceList.contains('device\n')) {
+        def deviceLines = deviceList.split('\n').findAll { it.contains('\tdevice') }
+        
+        if (deviceLines.isEmpty()) {
             throw new GradleException("No Android device connected. Please connect a device and enable USB debugging.")
         }
         
-        println "Syncing app_device files to device..."
+        // If multiple devices, use the first one (or could prompt user, but for automation use first)
+        def deviceId = null
+        if (deviceLines.size() > 1) {
+            println "Warning: Multiple devices connected. Using first device: ${deviceLines[0].split('\t')[0]}"
+            deviceId = deviceLines[0].split('\t')[0]
+        }
         
-        // Create the target directory on device
+        // Build adb command with device ID if needed
+        def adbCmd = { args ->
+            if (deviceId != null) {
+                return [adb, '-s', deviceId] + args
+            } else {
+                return [adb] + args
+            }
+        }
+        
+        println "Syncing config files to device..."
+        
+        // App package name
+        def appPackage = "com.openvins.android"
+        // Private external files directory (app has full access)
+        def privateConfigPath = "/storage/emulated/0/Android/data/${appPackage}/files/config"
+        
+        // Create the public directory for recordings (app will create recordings here)
         try {
             exec {
-                commandLine adb, 'shell', 'mkdir', '-p', devicePath
+                commandLine adbCmd(['shell', 'mkdir', '-p', devicePath])
             }
         } catch (Exception e) {
             println "Warning: Failed to create directory ${devicePath}: ${e.message}"
         }
         
-        // Collect all files first
-        def filesToSync = []
-        appDeviceDir.eachFileRecurse { file ->
-            if (file.isFile()) {
-                filesToSync.add(file)
+        // Create private config directory (may fail if app not installed, that's ok)
+        try {
+            exec {
+                commandLine adbCmd(['shell', 'mkdir', '-p', privateConfigPath])
+                standardOutput = new ByteArrayOutputStream()
+                errorOutput = new ByteArrayOutputStream()
             }
+        } catch (Exception e) {
+            println "Note: Private directory creation may have failed (app may not be installed yet)"
         }
         
-        // Push all files from app_device to the device
-        def appDevicePath = appDeviceDir.absolutePath
-        def adbOutput = new ByteArrayOutputStream()
-        filesToSync.each { file ->
-            // Calculate relative path manually
-            def filePath = file.absolutePath
-            def relativePath = filePath.substring(appDevicePath.length() + 1).replace('\\', '/')
-            def parentPath = new File(relativePath).parent
-            def targetDir = parentPath ? "${devicePath}/${parentPath}" : devicePath
-            
-            // Create target directory on device if needed
-            if (parentPath) {
-                try {
-                    exec {
-                        commandLine adb, 'shell', 'mkdir', '-p', targetDir
-                        standardOutput = new ByteArrayOutputStream()
-                        errorOutput = new ByteArrayOutputStream()
+        // Push config files to private directory (app can access these without permissions)
+        def configDir = new File(appDeviceDir, "config")
+        def configFileCount = 0
+        if (configDir.exists() && configDir.isDirectory()) {
+            println "Pushing config files to private directory..."
+            configDir.eachFile { configFile ->
+                if (configFile.isFile() && configFile.name.endsWith('.yaml')) {
+                    try {
+                        exec {
+                            commandLine adbCmd(['push', configFile.toString(), privateConfigPath])
+                            standardOutput = new ByteArrayOutputStream()
+                            errorOutput = new ByteArrayOutputStream()
+                        }
+                        println "  Pushed ${configFile.name} to private directory"
+                        configFileCount++
+                    } catch (Exception e) {
+                        println "  Warning: Failed to push ${configFile.name} to private directory (app may not be installed): ${e.message}"
                     }
-                } catch (Exception e) {
-                    // Silently fail - directory might already exist
                 }
-            }
-            
-            // Push the file to the target directory (suppress adb output)
-            try {
-                exec {
-                    commandLine adb, 'push', file.toString(), targetDir
-                    standardOutput = adbOutput
-                    errorOutput = adbOutput
-                }
-            } catch (Exception e) {
-                throw new GradleException("Failed to push ${relativePath}: ${e.message}")
             }
         }
         
-        println "Synced ${filesToSync.size()} files to device"
+        println "Synced ${configFileCount} config files to private directory"
+        println "Config files are available at: ${privateConfigPath}"
     }
 }
 

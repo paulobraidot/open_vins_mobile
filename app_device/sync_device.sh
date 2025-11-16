@@ -24,8 +24,15 @@ elif [ -n "${ANDROID_HOME}" ]; then
 elif [ -n "${ANDROID_SDK_ROOT}" ]; then
     ADB="${ANDROID_SDK_ROOT}/platform-tools/adb"
 else
-    echo "Error: adb not found. Please ensure Android SDK platform-tools is in PATH or set ANDROID_HOME/ANDROID_SDK_ROOT"
-    exit 1
+    # Check Android SDK location (default installation path)
+    sdk_adb="${HOME}/Android/Sdk/platform-tools/adb"
+    if [ -f "${sdk_adb}" ] && [ -x "${sdk_adb}" ]; then
+        ADB="${sdk_adb}"
+    else
+        echo "Error: adb not found. Please ensure Android SDK platform-tools is in PATH or set ANDROID_HOME/ANDROID_SDK_ROOT"
+        echo "Or ensure ~/Android/Sdk/platform-tools/adb exists"
+        exit 1
+    fi
 fi
 
 # Check if device is connected
@@ -37,13 +44,22 @@ if [ "${DEVICES}" -eq 0 ]; then
 fi
 
 echo "Found ${DEVICES} device(s)"
-echo "Syncing ${APP_DEVICE_DIR} to ${DEVICE_PATH} on device..."
 
-# Create the target directory on device
+# App package name
+APP_PACKAGE="com.openvins.android"
+# Private external files directory (app has full access)
+PRIVATE_CONFIG_PATH="/storage/emulated/0/Android/data/${APP_PACKAGE}/files/config"
+
+echo "Syncing ${APP_DEVICE_DIR} to ${DEVICE_PATH} on device..."
+echo "Also syncing config files to private directory: ${PRIVATE_CONFIG_PATH}"
+
+# Create the target directory on device (public)
 ${ADB} shell mkdir -p "${DEVICE_PATH}"
 
-# Push all files from app_device to the device
-# We need to push the contents, not the directory itself
+# Create private config directory (may fail if app not installed, that's ok)
+${ADB} shell mkdir -p "${PRIVATE_CONFIG_PATH}" 2>/dev/null || echo "Note: Private directory creation may have failed (app may not be installed yet)"
+
+# Push all files from app_device to the device (public directory)
 find "${APP_DEVICE_DIR}" -type f | while read -r file; do
     # Get relative path from app_device directory
     # Remove the app_device directory prefix
@@ -60,6 +76,21 @@ find "${APP_DEVICE_DIR}" -type f | while read -r file; do
     ${ADB} push "${file}" "${target_dir}/"
 done
 
+# Push config files to private directory (app can access these without permissions)
+if [ -d "${APP_DEVICE_DIR}/config" ]; then
+    echo "Pushing config files to private directory..."
+    ${ADB} shell mkdir -p "${PRIVATE_CONFIG_PATH}" 2>/dev/null || true
+    for config_file in "${APP_DEVICE_DIR}"/config/*.yaml; do
+        if [ -f "${config_file}" ]; then
+            config_name=$(basename "${config_file}")
+            echo "  Pushing ${config_name} to private directory..."
+            ${ADB} push "${config_file}" "${PRIVATE_CONFIG_PATH}/" 2>/dev/null || \
+                echo "    Warning: Failed to push ${config_name} to private directory (app may not be installed)"
+        fi
+    done
+fi
+
 echo "Successfully synced files to device!"
-echo "Files are now available at: ${DEVICE_PATH}"
+echo "Files are available at: ${DEVICE_PATH}"
+echo "Config files are also available at: ${PRIVATE_CONFIG_PATH}"
 

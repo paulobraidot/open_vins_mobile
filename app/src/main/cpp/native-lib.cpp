@@ -5,6 +5,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <errno.h>
 #include <string>
 #include <algorithm>
 #include <iomanip>
@@ -42,8 +43,9 @@
 
 bool is_recording = false;
 bool is_running_ov = false;
-bool app_folder_set = false;
-std::string app_folder = "/sdcard/";
+bool app_record_folder_set = false;
+std::string app_record_folder = "/sdcard/";  // Public directory for recordings (user accessible)
+std::string app_private_folder = "/sdcard/";  // Private external files directory (app has full access)
 std::string save_folder = "/sdcard/";
 std::ofstream imu_csv;
 
@@ -253,11 +255,18 @@ void processing_worker_thread() {
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_openvins_android_MainActivity_setAppFolderJNI(JNIEnv *env, jobject instance, jstring dir) {
+Java_com_openvins_android_MainActivity_setAppRecordFolderJNI(JNIEnv *env, jobject instance, jstring dir) {
     const char *temp = env->GetStringUTFChars(dir, NULL);
-    app_folder = std::string(temp);
-    app_folder_set = true;
-    __android_log_print(ANDROID_LOG_INFO, TAG, "export app folder: %s\n", app_folder.c_str());
+    app_record_folder = std::string(temp);
+    app_record_folder_set = true;
+    __android_log_print(ANDROID_LOG_INFO, TAG, "export app record folder: %s\n", app_record_folder.c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_openvins_android_MainActivity_setAppPrivateFolderJNI(JNIEnv *env, jobject instance, jstring dir) {
+    const char *temp = env->GetStringUTFChars(dir, NULL);
+    app_private_folder = std::string(temp);
+    __android_log_print(ANDROID_LOG_INFO, TAG, "export app private folder: %s\n", app_private_folder.c_str());
 }
 
 
@@ -274,7 +283,13 @@ Java_com_openvins_android_MainActivity_setRecordStateJNI(JNIEnv *env, jobject in
                             "%F_%T"); // ISO 8601 without timezone information.
         auto s = ss.str();
         std::replace(s.begin(), s.end(), ':', '-');
-        save_folder = app_folder + "/" + s + "/";
+        
+        // Normalize path: remove trailing slash from app_record_folder if present
+        std::string normalized_app_record_folder = app_record_folder;
+        if (!normalized_app_record_folder.empty() && normalized_app_record_folder.back() == '/') {
+            normalized_app_record_folder.pop_back();
+        }
+        save_folder = normalized_app_record_folder + "/" + s + "/";
 
         // Make the folder if not there
         struct stat st = {0};
@@ -592,8 +607,8 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
         __android_log_print(ANDROID_LOG_INFO, TAG, "saved file: %s\n", filename.c_str());
     }
 
-    // Return if the app folder has not been set yet
-    if (!app_folder_set) {
+    // Return if the app record folder has not been set yet
+    if (!app_record_folder_set) {
         return;
     }
 
@@ -604,8 +619,26 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
         ov_core::Printer::setPrintLevel(ov_core::Printer::PrintLevel::ALL);
 
         // Load the config
-        std::string config_path = app_folder + "/config/estimator_config.yaml";
-        auto parser = std::make_shared<ov_core::YamlParser>(config_path, false);
+        // Use app_private_folder (private external files directory root) for config files
+        // Add /config/ subdirectory in native code
+        // Normalize path: remove trailing slash from app_private_folder if present
+        std::string normalized_app_private_folder = app_private_folder;
+        if (!normalized_app_private_folder.empty() && normalized_app_private_folder.back() == '/') {
+            normalized_app_private_folder.pop_back();
+        }
+        std::string config_path = normalized_app_private_folder + "/config/estimator_config.yaml";
+        
+        // Debug: Check if file exists and is accessible
+        struct stat st;
+        if (stat(config_path.c_str(), &st) == 0) {
+            __android_log_print(ANDROID_LOG_INFO, TAG, "Config file exists: %s (size: %ld bytes, mode: %o)\n", 
+                                config_path.c_str(), st.st_size, st.st_mode);
+        } else {
+            __android_log_print(ANDROID_LOG_ERROR, TAG, "Config file does not exist or is not accessible: %s (errno: %d)\n", 
+                                config_path.c_str(), errno);
+        }
+        
+        auto parser = std::make_shared<ov_core::YamlParser>(config_path, true);
         ov_msckf::VioManagerOptions params;
         params.print_and_load(parser);
 
@@ -613,7 +646,6 @@ Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject inst
         params.use_multi_threading_subs = true;
         params.num_opencv_threads = 1;
         params.use_aruco = false;
-
 
         // Timing stats
         params.record_timing_information = false;
