@@ -230,7 +230,7 @@ void processing_worker_thread() {
       viz_track_last_time = current_time;
 
       // Display things if we have initialized
-      if(sys->initialized()) {
+      if (sys->initialized()) {
         // Store trajectory point (camera pose)
         // q_cam is JPL format [qx, qy, qz, qw], but TrajectoryPoint expects [qw, qx, qy, qz]
         std::lock_guard<std::mutex> traj_lck(trajectory_mtx);
@@ -245,17 +245,17 @@ void processing_worker_thread() {
         ss1 << std::fixed << std::setprecision(3);
         ss1 << "q = " << q_GtoI(0) << "," << q_GtoI(1) << "," << q_GtoI(2) << "," << q_GtoI(3);
         ss1 << "  p = " << std::setprecision(2) << p_IinG(0) << "," << p_IinG(1) << "," << p_IinG(2);
-        
+
         // Combine q_c and p_c on same line
         ss2 << std::fixed << std::setprecision(3);
         ss2 << "q_c = " << q_ItoC(0) << "," << q_ItoC(1) << "," << q_ItoC(2) << "," << q_ItoC(3);
         ss2 << "  p_c = " << p_IinC(0) << "," << p_IinC(1) << "," << p_IinC(2);
-        
+
         // Camera-IMU time offset (should always be available)
         assert(state->_calib_dt_CAMtoIMU != nullptr && "Camera-IMU time offset calibration must exist");
         ss3 << std::fixed << std::setprecision(5);
         ss3 << "dt = " << state->_calib_dt_CAMtoIMU->value()(0);
-        
+
         viz_state1 = ss1.str();
         viz_state2 = ss2.str();
         viz_state3 = ss3.str();
@@ -589,18 +589,18 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_openvins_android_Camera2ResView_getD
   // Use smaller font and thinner outline to fit more lines
   const double font_scale = 0.6;
   const int font_thickness = 1;
-  const int line_spacing = 18;  // Spacing between lines in pixels
-  
+  const int line_spacing = 18; // Spacing between lines in pixels
+
   if (sys != nullptr && !viz_state1.empty()) {
-    int y_start = displayMat->rows - (line_spacing * 3);  // Start 3 lines from bottom
+    int y_start = displayMat->rows - (line_spacing * 3); // Start 3 lines from bottom
     cv::Point point1(10, y_start);
     cv::putText(*displayMat, viz_state1, point1, cv::FONT_HERSHEY_COMPLEX_SMALL, font_scale, cv::Scalar(255, 0, 0), font_thickness);
-    
+
     if (!viz_state2.empty()) {
       cv::Point point2(10, y_start + line_spacing);
       cv::putText(*displayMat, viz_state2, point2, cv::FONT_HERSHEY_COMPLEX_SMALL, font_scale, cv::Scalar(255, 0, 0), font_thickness);
     }
-    
+
     if (!viz_state3.empty()) {
       cv::Point point3(10, y_start + line_spacing * 2);
       cv::putText(*displayMat, viz_state3, point3, cv::FONT_HERSHEY_COMPLEX_SMALL, font_scale, cv::Scalar(255, 0, 0), font_thickness);
@@ -670,8 +670,8 @@ extern "C" JNIEXPORT void JNICALL Java_com_openvins_android_MainActivity_process
 
     // Hardcoded parameters
     params.use_multi_threading_subs = true;
-    params.num_opencv_threads = 1; // phones suck
-    params.use_aruco = false; // no extra opencv lib
+    params.num_opencv_threads = 1;            // phones suck
+    params.use_aruco = false;                 // no extra opencv lib
     params.init_options.init_dyn_use = false; // no ceres solver lib
 
     // Timing stats
@@ -842,10 +842,10 @@ extern "C" JNIEXPORT jboolean JNICALL Java_com_openvins_android_MainActivity_get
   auto calib = state->_calib_IMUtoCAM.at(0);
   Eigen::Vector4d q_ItoC = calib->quat();
   Eigen::Vector3d p_IinC = calib->pos();
-  
+
   // Compose rotations: q_GtoC = q_ItoC * q_GtoI
   Eigen::Vector4d q_cam = ov_core::quat_multiply(q_ItoC, q_GtoI);
-  
+
   // Transform position: p_CinG = p_IinG - R_GtoC * p_IinC
   // where R_GtoC = quat_2_Rot(q_GtoC).transpose()
   Eigen::Vector3d p_cam = p_IinG - ov_core::quat_2_Rot(q_cam).transpose() * p_IinC;
