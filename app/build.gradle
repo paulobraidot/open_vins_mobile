@@ -60,3 +60,144 @@ dependencies {
     implementation project(':thirdparty:opencv')
     //implementation project(':open_vins')
 }
+
+// Task to sync app_device files to the device
+task syncDeviceFiles {
+    description = 'Sync app_device files to Android device'
+    group = 'build'
+    
+    doFirst {
+        def appDeviceDir = file("${project.rootDir}/app_device")
+        def devicePath = "/storage/emulated/0/Documents/openvins"
+        
+        if (!appDeviceDir.exists()) {
+            throw new GradleException("app_device directory not found at ${appDeviceDir}")
+        }
+        
+        // Check if adb is available
+        def adb = android.getAdbExe().toString()
+        
+        // Check if device is connected
+        def devices = new ByteArrayOutputStream()
+        def devicesErr = new ByteArrayOutputStream()
+        exec {
+            commandLine adb, 'devices'
+            standardOutput = devices
+            errorOutput = devicesErr
+            ignoreExitValue = true
+        }
+        
+        def deviceList = devices.toString().trim()
+        if (!deviceList.contains('\tdevice') && !deviceList.contains('device\n')) {
+            throw new GradleException("No Android device connected. Please connect a device and enable USB debugging.")
+        }
+        
+        println "Syncing app_device files to device..."
+        
+        // Create the target directory on device
+        try {
+            exec {
+                commandLine adb, 'shell', 'mkdir', '-p', devicePath
+            }
+        } catch (Exception e) {
+            println "Warning: Failed to create directory ${devicePath}: ${e.message}"
+        }
+        
+        // Collect all files first
+        def filesToSync = []
+        appDeviceDir.eachFileRecurse { file ->
+            if (file.isFile()) {
+                filesToSync.add(file)
+            }
+        }
+        
+        // Push all files from app_device to the device
+        def appDevicePath = appDeviceDir.absolutePath
+        def adbOutput = new ByteArrayOutputStream()
+        filesToSync.each { file ->
+            // Calculate relative path manually
+            def filePath = file.absolutePath
+            def relativePath = filePath.substring(appDevicePath.length() + 1).replace('\\', '/')
+            def parentPath = new File(relativePath).parent
+            def targetDir = parentPath ? "${devicePath}/${parentPath}" : devicePath
+            
+            // Create target directory on device if needed
+            if (parentPath) {
+                try {
+                    exec {
+                        commandLine adb, 'shell', 'mkdir', '-p', targetDir
+                        standardOutput = new ByteArrayOutputStream()
+                        errorOutput = new ByteArrayOutputStream()
+                    }
+                } catch (Exception e) {
+                    // Silently fail - directory might already exist
+                }
+            }
+            
+            // Push the file to the target directory (suppress adb output)
+            try {
+                exec {
+                    commandLine adb, 'push', file.toString(), targetDir
+                    standardOutput = adbOutput
+                    errorOutput = adbOutput
+                }
+            } catch (Exception e) {
+                throw new GradleException("Failed to push ${relativePath}: ${e.message}")
+            }
+        }
+        
+        println "Synced ${filesToSync.size()} files to device"
+    }
+}
+
+// Make syncDeviceFiles run before install and assemble tasks
+// Hook early using whenTaskAdded to catch tasks as they're created
+tasks.whenTaskAdded { task ->
+    if (task.name == 'installDebug' || task.name == 'installRelease' ||
+        task.name == 'assembleDebug' || task.name == 'assembleRelease') {
+        task.dependsOn syncDeviceFiles
+    }
+}
+
+// Also hook in afterEvaluate to catch tasks that already exist
+afterEvaluate {
+    // Track which tasks we've already hooked to avoid duplicates
+    def hookedTasks = [] as Set
+    
+    // Hook into assembleDebug and assembleRelease tasks (run by "play" button)
+    def assembleDebugTask = tasks.findByName('assembleDebug')
+    if (assembleDebugTask != null) {
+        assembleDebugTask.dependsOn syncDeviceFiles
+        hookedTasks.add('assembleDebug')
+    }
+    
+    def assembleReleaseTask = tasks.findByName('assembleRelease')
+    if (assembleReleaseTask != null) {
+        assembleReleaseTask.dependsOn syncDeviceFiles
+        hookedTasks.add('assembleRelease')
+    }
+    
+    // Hook into installDebug and installRelease tasks
+    def installDebugTask = tasks.findByName('installDebug')
+    if (installDebugTask != null) {
+        installDebugTask.dependsOn syncDeviceFiles
+        hookedTasks.add('installDebug')
+    }
+    
+    def installReleaseTask = tasks.findByName('installRelease')
+    if (installReleaseTask != null) {
+        installReleaseTask.dependsOn syncDeviceFiles
+        hookedTasks.add('installRelease')
+    }
+    
+    // Match any install or assemble tasks that contain Debug or Release
+    tasks.matching { 
+        (it.name.startsWith('install') || it.name.startsWith('assemble')) && 
+        (it.name.contains('Debug') || it.name.contains('Release')) &&
+        it.name != 'installDebugAndroidTest' &&
+        it.name != 'installReleaseAndroidTest' &&
+        !hookedTasks.contains(it.name)
+    }.configureEach { task ->
+        task.dependsOn syncDeviceFiles
+    }
+}
