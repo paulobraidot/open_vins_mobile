@@ -4,13 +4,15 @@ This folder contains the android application that allows for running of [OpenVIN
 We leverage the Android NDK to allow for building of our C++ project directly in the toolchain.
 If you want to use this application, open it up in Android Studio Otter | 2025.2.1.
 You might need to use SDK manager to install CMake 3.18.1.
-We use the Camera2 api to get the camera information from android and then pipe that into c++ via a JNI interfance.
+We use the Camera2 api to get the camera information [from android](app/src/main/java/com/openvins/android/) and then pipe that into c++ via a [JNI interfance](app/src/main/cpp/native-lib.cpp).
 Once in c++ we have a second background thread which is consuming the images and pushing to the VioManager directly.
 
 
 ## Getting Started
 
 1. Clone this repository: `git clone --recurse-submodules https://github.com/goldbattle/open_vins_mobile.git`
+    - OpenVINS will be located in [app/src/main/cpp/open_vins/](app/src/main/cpp/open_vins/)
+    - The native code which passes information into OpenVINS is [native-lib.cpp](app/src/main/cpp/native-lib.cpp)
 2. Open the cloned folder in Android Studio and "run" / build it and install it on your device
     - This will build both the [OpenVINS](https://github.com/rpng/open_vins/) c++ library, but also the Kotlin java component of it
     - As a post step, all the things in [app_device/](app_device/) are copied to the private app folder
@@ -73,7 +75,6 @@ following:
 ```
 
 OpenVINS is license under the [GNU General Public License v3 (GPL-3)](https://www.gnu.org/licenses/gpl-3.0.txt), please checkout its [LICENSE](https://github.com/rpng/open_vins/blob/master/LICENSE).
-
 This mobile code codebase and native code is also licensed under the [GNU General Public License v3 (GPL-3)](https://www.gnu.org/licenses/gpl-3.0.txt).
 You must preserve the copyright and license notices in your derivative work and make available the complete source code with modifications under the same license ([see this](https://choosealicense.com/licenses/gpl-3.0/); this is not legal advice).
 
