@@ -1,0 +1,17 @@
+# Ignore Kalibr repository
+kalibr_repo/
+
+# Ignore downloaded datasets (raw data)
+**/dataset-*/
+
+# Ignore temporary files
+*.tmp
+*/*.log
+*/*.sh
+**/result-*/*.log
+**/result-*/*.sh
+
+# Ignore bag files
+*.bag
+
+
