@@ -7,8 +7,11 @@ You might need to use SDK manager to install CMake 3.18.1.
 We use the Camera2 api to get the camera information [from android](app/src/main/java/com/openvins/android/) and then pipe that into c++ via a [JNI interfance](app/src/main/cpp/native-lib.cpp).
 Once in c++ we have a second background thread which is consuming the images and pushing to the VioManager directly.
 
-![](docs/Screenshot_20251116_134901_open_vins_android.jpg)
-![](docs/Screenshot_20251116_134626_open_vins_android.jpg)
+
+
+https://github.com/user-attachments/assets/2d706994-b87c-4a8e-bc83-50648ab8ad6a
+
+
 
 
 ## Getting Started
