@@ -104,6 +104,42 @@ std::vector<TrajectoryPoint> trajectory_history;
 std::mutex trajectory_mtx;
 const size_t MAX_TRAJECTORY_POINTS = 10000; // Limit trajectory size
 
+// JNI OnLoad/OnUnload handlers for proper cleanup
+JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
+  return JNI_VERSION_1_6;
+}
+
+JNIEXPORT void JNICALL JNI_OnUnload(JavaVM *vm, void *reserved) {
+  // Ensure all threads are stopped and resources are cleaned up
+  __android_log_print(ANDROID_LOG_INFO, TAG, "JNI_OnUnload: cleaning up resources\n");
+  
+  // Stop the worker thread if running
+  if (thread_running) {
+    thread_should_run = false;
+    processing_cv.notify_all();
+    
+    // Wait for thread to finish (with timeout)
+    if (processing_thread.joinable()) {
+      processing_thread.join();
+    }
+  }
+  
+  // Clean up VIO system
+  {
+    std::lock_guard<std::mutex> lck(camera_queue_mtx);
+    sys = nullptr;
+    camera_queue.clear();
+    camera_last_timestamp.clear();
+  }
+  
+  // Close IMU CSV if open
+  if (imu_csv.is_open()) {
+    imu_csv.close();
+  }
+  
+  __android_log_print(ANDROID_LOG_INFO, TAG, "JNI_OnUnload: cleanup complete\n");
+}
+
 // Worker thread function that continuously processes camera measurements
 void processing_worker_thread() {
   __android_log_print(ANDROID_LOG_INFO, TAG, "Processing worker thread started\n");
@@ -608,6 +644,14 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_openvins_android_Camera2ResView_getD
   }
 
   return reinterpret_cast<jlong>(displayMat);
+}
+
+// Delete a Mat object that was allocated with new (to prevent memory leaks)
+extern "C" JNIEXPORT void JNICALL Java_com_openvins_android_Camera2ResView_deleteMatJNI(JNIEnv *env, jclass clazz, jlong matAddr) {
+  if (matAddr != 0) {
+    cv::Mat *mat = reinterpret_cast<cv::Mat *>(matAddr);
+    delete mat;
+  }
 }
 
 extern "C" JNIEXPORT void JNICALL Java_com_openvins_android_MainActivity_processImageJNI(JNIEnv *env, jobject instance, jlong matAddr,

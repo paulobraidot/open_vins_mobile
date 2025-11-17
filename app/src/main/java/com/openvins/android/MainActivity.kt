@@ -259,7 +259,27 @@ class MainActivity : AppCompatActivity(), CameraFrameListener, SensorEventListen
 
     public override fun onDestroy() {
         super.onDestroy()
-        if (mOpenCvCameraView != null) mOpenCvCameraView!!.disableView()
+        
+        // Stop trajectory updates
+        trajectoryUpdateHandler.removeCallbacks(trajectoryUpdateRunnable)
+        
+        // Unregister sensor listeners
+        sensorManager.unregisterListener(this)
+        
+        // Stop OpenVINS system and clean up native resources
+        if (isRunningOV) {
+            toggleSystemJNI(false)
+        }
+        
+        // Stop recording if active
+        if (isRecording) {
+            setRecordStateJNI(false)
+        }
+        
+        // Disable camera view
+        if (mOpenCvCameraView != null) {
+            mOpenCvCameraView!!.disableView()
+        }
     }
 
     override fun onFrame(matAddr: Long, timestampSec: Double) {

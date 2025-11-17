@@ -320,16 +320,29 @@ class Camera2ResView(context: Context?, attrs: AttributeSet?) : SurfaceView(cont
                     uPixelStride
                 )
                 
-                // Notify listener with Mat address and timestamp (for processing)
-                mFrameListener?.onFrame(rgbaMatAddr, lastFrameTimestampSec)
+                if (rgbaMatAddr == 0L) {
+                    image.close()
+                    return@setOnImageAvailableListener
+                }
                 
-                // Get display image (raw camera if not running, or viz with overlays if running)
-                if (rgbaMatAddr != 0L) {
+                try {
+                    // Notify listener with Mat address and timestamp (for processing)
+                    // processImageJNI will clone the Mat before queuing, so it's safe to delete after
+                    mFrameListener?.onFrame(rgbaMatAddr, lastFrameTimestampSec)
+                    
+                    // Get display image (raw camera if not running, or viz with overlays if running)
+                    // Note: getDisplayImageJNI creates a new Mat, so we can safely delete rgbaMatAddr after this
                     val displayMatAddr = getDisplayImageJNI(rgbaMatAddr)
+                    
+                    // Now safe to delete the raw camera Mat since:
+                    // 1. processImageJNI has cloned the data it needs before queuing
+                    // 2. getDisplayImageJNI has created a new Mat and is done with the original
+                    deleteMatJNI(rgbaMatAddr)
+                    
                     if (displayMatAddr != 0L) {
-                        var displayMat: Mat? = null
                         try {
-                            displayMat = Mat(displayMatAddr)
+                            // Use Java Mat wrapper temporarily to access Mat data for bitmap conversion
+                            val displayMat = Mat(displayMatAddr)
                             synchronized(mDisplayLock) {
                                 val displayWidth = displayMat.width()
                                 val displayHeight = displayMat.height()
@@ -337,7 +350,7 @@ class Camera2ResView(context: Context?, attrs: AttributeSet?) : SurfaceView(cont
                                     mDisplayBitmap?.recycle()
                                     mDisplayBitmap = Bitmap.createBitmap(displayWidth, displayHeight, Bitmap.Config.ARGB_8888)
                                 }
-                                // Convert Mat to Bitmap (displayMat is already RGB)
+                                // Convert Mat to Bitmap
                                 Utils.matToBitmap(displayMat, mDisplayBitmap!!)
                                 
                                 // Draw to surface on UI thread
@@ -345,11 +358,28 @@ class Camera2ResView(context: Context?, attrs: AttributeSet?) : SurfaceView(cont
                                     drawFrame()
                                 }
                             }
+                            // Delete the Mat manually (created with 'new' in C++)
+                            // Set nativeObj to 0 first to prevent Java finalizer from double-deleting
+                            val field = Mat::class.java.getDeclaredField("nativeObj")
+                            field.isAccessible = true
+                            field.setLong(displayMat, 0L)
+                            deleteMatJNI(displayMatAddr)
                         } catch (e: Exception) {
                             Log.e(TAG, "Error displaying frame", e)
-                        } finally {
-                            // Release the Mat (native memory will be freed)
-                            displayMat?.release()
+                            // Make sure we still delete the Mat even if there's an error
+                            if (displayMatAddr != 0L) {
+                                deleteMatJNI(displayMatAddr)
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error processing frame", e)
+                    // Make sure we still delete the Mat even if there's an error
+                    if (rgbaMatAddr != 0L) {
+                        try {
+                            deleteMatJNI(rgbaMatAddr)
+                        } catch (e2: Exception) {
+                            Log.e(TAG, "Error deleting Mat", e2)
                         }
                     }
                 }
@@ -511,5 +541,8 @@ class Camera2ResView(context: Context?, attrs: AttributeSet?) : SurfaceView(cont
         
         @JvmStatic
         private external fun getDisplayImageJNI(rawCameraMatAddr: Long): Long  // Returns Mat address of display image (RGB), or 0 if error
+        
+        @JvmStatic
+        private external fun deleteMatJNI(matAddr: Long)  // Deletes a Mat object allocated with new in native code
     }
 }
