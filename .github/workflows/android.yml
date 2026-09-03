@@ -12,10 +12,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 1. Checkout de la rama 'restructure' y Submódulos (¡CRÍTICO!)
+      - name: 1. Checkout de la rama 'restructure' y Submódulos
         uses: actions/checkout@v4
         with:
-          # Fuerza a clonar todos los submódulos de OpenVINS necesarios para el NDK
           submodules: recursive 
 
       - name: 2. Configurar Java JDK 17
@@ -27,9 +26,8 @@ jobs:
       - name: 3. Dar permisos de ejecución a Gradle
         run: chmod +x ./gradlew
 
-      - name: 4. Compilar APK (Debug)
-        # Gradle se encarga de descargar el NDK y compilar tanto Kotlin como C++
-        run: ./gradlew assembleDebug
+      - name: 4. Compilar APK (Debug) deshabilitando tareas de ADB
+        run: ./gradlew assembleDebug -x syncDeviceFiles -x installDebug
 
       - name: 5. Subir APK para descargar e instalar en el M99
         uses: actions/upload-artifact@v4
