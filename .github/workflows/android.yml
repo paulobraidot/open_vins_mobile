@@ -2,9 +2,9 @@ name: Build OpenVINS Mobile APK
 
 on:
   push:
-    branches: [ "master", "main" ]
+    branches: [ "restructure" ]
   pull_request:
-    branches: [ "master", "main" ]
+    branches: [ "restructure" ]
 
 jobs:
   build:
@@ -12,11 +12,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 1. Checkout del Repositorio y Submódulos (¡CRÍTICO!)
+      - name: 1. Checkout de la rama 'restructure' y Submódulos (¡CRÍTICO!)
         uses: actions/checkout@v4
         with:
-          # Es fundamental descargar los submódulos, de lo contrario la carpeta
-          # app/src/main/cpp/OpenVINS estará vacía y fallará el C++ build.
+          # Fuerza a clonar todos los submódulos de OpenVINS necesarios para el NDK
           submodules: recursive 
 
       - name: 2. Configurar Java JDK 17
@@ -29,9 +28,7 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: 4. Compilar APK (Debug)
-        # Este comando hace todo el trabajo pesado: 
-        # Descarga el NDK, ejecuta CMake 3.18, compila el C++ (Eigen, OpenCV) 
-        # y empaqueta la app Android.
+        # Gradle se encarga de descargar el NDK y compilar tanto Kotlin como C++
         run: ./gradlew assembleDebug
 
       - name: 5. Subir APK para descargar e instalar en el M99
