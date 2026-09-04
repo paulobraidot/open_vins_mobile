@@ -1,4 +1,4 @@
-name: Build OpenVINS Mobile APK
+name: Android CI & OpenVINS Setup
 
 on:
   push:
@@ -7,30 +7,58 @@ on:
     branches: [ "restructure" ]
 
 jobs:
-  build:
-    name: Compilar APK (Kotlin + C++ NDK)
+  build-and-test:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 1. Checkout de la rama 'restructure' y Submódulos
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive 
+    - name: Checkout repository with submodules
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
 
-      - name: 2. Configurar Java JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: gradle
 
-      - name: 3. Dar permisos de ejecución a Gradle
-        run: chmod +x ./gradlew
+    - name: Grant execute permission for gradlew
+      run: chmod +x gradlew
 
-      - name: 4. Compilar APK (Debug) deshabilitando tareas de ADB
-        run: ./gradlew assembleDebug -x syncDeviceFiles -x installDebug
+    - name: Build Debug APK
+      run: ./gradlew assembleDebug
 
-      - name: 5. Subir APK para descargar e instalar en el M99
-        uses: actions/upload-artifact@v4
-        with:
-          name: open_vins_mobile-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+    - name: Upload Debug APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: open_vins_mobile-debug-apk
+        path: app/build/outputs/apk/debug/app-debug.apk
+
+    - name: Run Android Emulator and Push Calibration
+      uses: reactivecircus/android-emulator-runner@v2
+      with:
+        api-level: 30
+        target: default
+        arch: x86_64
+        profile: Pixel_6
+        script: |
+          PACKAGE_NAME="com.openvins.android"
+          TARGET_DIR="/sdcard/Android/data/${PACKAGE_NAME}/files/config"
+
+          # Crear directorio en el emulador
+          adb shell "mkdir -p ${TARGET_DIR}"
+
+          # Copiar archivos desde app_device/config
+          if [ -d "app_device/config" ]; then
+            adb push app_device/config/. "${TARGET_DIR}/"
+          else
+            echo "Error: No se encontró la carpeta app_device/config."
+            exit 1
+          fi
+
+          # Verificar archivos
+          adb shell "ls -la ${TARGET_DIR}"
+
+          # Ejecutar tests instrumentados
+          ./gradlew connectedCheck
