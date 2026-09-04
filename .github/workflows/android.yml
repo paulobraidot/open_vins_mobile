@@ -51,21 +51,19 @@ jobs:
         disable-animations: false
         emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
         script: |
-          TARGET_DIR="/sdcard/Android/data/com.openvins.android/files/config"
+          # 1. Crear la estructura de carpetas privada directamente en el almacenamiento interno
+          adb shell mkdir -p /sdcard/Android/data/com.openvins.android/files/config
 
-          # 1. Crear directorio destino evitando problemas de formateo en adb shell
-          adb shell mkdir -p "$TARGET_DIR"
-
-          # 2. Copiar archivos desde app_device/config al emulador vía ADB
+          # 2. Transferir los archivos YAML de configuración desde el repositorio
           if [ -d "app_device/config" ]; then
-            adb push app_device/config/. "$TARGET_DIR/"
+            adb push app_device/config/. /sdcard/Android/data/com.openvins.android/files/config/
           else
             echo "Error: No se encontró la carpeta app_device/config."
             exit 1
           fi
 
-          # 3. Verificar transferencia de archivos
-          adb shell ls -la "$TARGET_DIR"
+          # 3. Listar archivos para verificar que se copiaron correctamente
+          adb shell ls -la /sdcard/Android/data/com.openvins.android/files/config/
 
-          # 4. Ejecutar tests instrumentados ignorando syncDeviceFiles
+          # 4. Ejecutar tests instrumentados ignorando la sincronización previa de Gradle
           ./gradlew connectedCheck -x :app:syncDeviceFiles
