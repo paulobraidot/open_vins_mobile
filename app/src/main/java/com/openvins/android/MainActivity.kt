@@ -349,7 +349,15 @@ class MainActivity : AppCompatActivity(), CameraFrameListener, SensorEventListen
             eventAccel = null;
             eventGyro = null;
         }
-
+        else if (eventAccel != null) {
+            val timestampSec = (eventAccel!!.timestamp * 1e-9)
+            processInertialJNI(
+                eventAccel!!.values[0], eventAccel!!.values[1], eventAccel!!.values[2],
+                0.0f, 0.0f, 0.0f,
+                timestampSec
+            )
+            eventAccel = null
+        }
     }
 
     override fun onAccuracyChanged(p0: Sensor?, p1: Int) {
