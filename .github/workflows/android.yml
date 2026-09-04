@@ -39,9 +39,11 @@ jobs:
       uses: reactivecircus/android-emulator-runner@v2
       with:
         api-level: 30
-        target: default
+        target: google_apis
         arch: x86_64
         profile: Pixel_6
+        emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+        disable-animations: true
         script: |
           PACKAGE_NAME="com.openvins.android"
           TARGET_DIR="/sdcard/Android/data/${PACKAGE_NAME}/files/config"
@@ -60,5 +62,5 @@ jobs:
           # 3. Verificar transferencia de archivos
           adb shell "ls -la ${TARGET_DIR}"
 
-          # 4. Ejecutar tests instrumentados
-          ./gradlew connectedCheck
+          # 4. Ejecutar tests instrumentados ignorando de nuevo la tarea syncDeviceFiles
+          ./gradlew connectedCheck -x :app:syncDeviceFiles
