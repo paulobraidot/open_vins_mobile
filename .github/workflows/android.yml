@@ -27,7 +27,7 @@ jobs:
       run: chmod +x gradlew
 
     - name: Build Debug APK
-      run: ./gradlew assembleDebug
+      run: ./gradlew assembleDebug -x :app:syncDeviceFiles
 
     - name: Upload Debug APK
       uses: actions/upload-artifact@v4
@@ -46,10 +46,10 @@ jobs:
           PACKAGE_NAME="com.openvins.android"
           TARGET_DIR="/sdcard/Android/data/${PACKAGE_NAME}/files/config"
 
-          # Crear directorio en el emulador
+          # 1. Crear directorio destino en el emulador iniciado
           adb shell "mkdir -p ${TARGET_DIR}"
 
-          # Copiar archivos desde app_device/config
+          # 2. Copiar archivos desde app_device/config al emulador vía ADB
           if [ -d "app_device/config" ]; then
             adb push app_device/config/. "${TARGET_DIR}/"
           else
@@ -57,8 +57,8 @@ jobs:
             exit 1
           fi
 
-          # Verificar archivos
+          # 3. Verificar transferencia de archivos
           adb shell "ls -la ${TARGET_DIR}"
 
-          # Ejecutar tests instrumentados
+          # 4. Ejecutar tests instrumentados
           ./gradlew connectedCheck
