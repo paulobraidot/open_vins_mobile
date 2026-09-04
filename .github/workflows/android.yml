@@ -41,7 +41,7 @@ jobs:
         api-level: 30
         target: google_apis
         arch: x86_64
-        profile: Pixel_6
+        profile: pixel
         emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
         disable-animations: true
         script: |
@@ -62,5 +62,5 @@ jobs:
           # 3. Verificar transferencia de archivos
           adb shell "ls -la ${TARGET_DIR}"
 
-          # 4. Ejecutar tests instrumentados ignorando de nuevo la tarea syncDeviceFiles
+          # 4. Ejecutar tests instrumentados ignorando syncDeviceFiles
           ./gradlew connectedCheck -x :app:syncDeviceFiles
