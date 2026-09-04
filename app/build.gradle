@@ -47,8 +47,8 @@ android {
     }
     sourceSets {
         main {
-            // Mapea la carpeta externa directamente como directorio 'res/raw' del APK
-            res.srcDirs += ['/app_device/config']
+            // Mapea la carpeta config directamente como directorio de assets
+            assets.srcDirs += ['../../app_device/config']
         }
     }
 }
