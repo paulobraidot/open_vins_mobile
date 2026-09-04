@@ -22,6 +22,7 @@ import androidx.core.app.ActivityCompat
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
 import android.os.Handler
 import android.os.Looper
 
@@ -98,7 +99,7 @@ class MainActivity : AppCompatActivity(), CameraFrameListener, SensorEventListen
             ).show()
         }
 
-        copyRawConfigToInternalStorage()
+        copyConfigToInternalStorage()
 
         // Our open folder button
         // Use private external files directory root for config (app has full access)
@@ -208,31 +209,31 @@ class MainActivity : AppCompatActivity(), CameraFrameListener, SensorEventListen
 
     }
     
-    fun copyRawConfigToInternalStorage() {
-        // 1. Apunta a /sdcard/Android/data/com.openvins.android/files/config
+    private fun copyConfigToInternalStorage() {
+        // Apunta a /sdcard/Android/data/com.openvins.android/files/config
         val targetDir = File(getExternalFilesDir(null), "config")
         if (!targetDir.exists()) {
-        targetDir.mkdirs()
+            targetDir.mkdirs()
         }
+    
+        try {
+            // Leemos la raíz de los assets
+            val assetFiles = assets.list("") ?: return
 
-        // 2. Obtiene todos los IDs de archivos cargados en res/raw
-        val rawFields = R.raw::class.java.fields
-
-        for (field in rawFields) {
-            try {
-                val resId = field.getInt(null)
-                val fileName = "${field.name}.yaml" // O la extensión que usen tus archivos
-                val outFile = File(targetDir, fileName)
-
-                // Copia o sobrescribe el archivo en el almacenamiento privado de la app
-                resources.openRawResource(resId).use { inputStream ->
-                    FileOutputStream(outFile).use { outputStream ->
-                        inputStream.copyTo(outputStream)
+            for (fileName in assetFiles) {
+                // Filtramos únicamente los archivos de configuración (por extensión .yaml o .txt)
+                if (fileName.endsWith(".yaml") || fileName.endsWith(".yml") || fileName.endsWith(".txt")) {
+                    val outFile = File(targetDir, fileName)
+    
+                    assets.open(fileName).use { inputStream ->
+                        FileOutputStream(outFile).use { outputStream ->
+                            inputStream.copyTo(outputStream)
+                        }
                     }
                 }
-            } catch (e: Exception) {
-                e.printStackTrace()
             }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
