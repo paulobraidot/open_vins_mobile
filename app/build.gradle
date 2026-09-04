@@ -48,7 +48,7 @@ android {
     sourceSets {
         main {
             // Mapea la carpeta config directamente como directorio de assets
-            assets.srcDirs += ['../../app_device/config']
+            assets.srcDirs += ['../app_device/config']
         }
     }
 }
