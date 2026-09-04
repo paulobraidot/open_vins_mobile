@@ -67,7 +67,7 @@ class MainActivity : AppCompatActivity(), CameraFrameListener, SensorEventListen
             ),
             PERMISSION_REQUEST
         )
-
+        
         // Setup our camera
         setContentView(R.layout.activity_main)
         mOpenCvCameraView = findViewById<View>(R.id.test_view) as Camera2ResView
@@ -96,6 +96,8 @@ class MainActivity : AppCompatActivity(), CameraFrameListener, SensorEventListen
                 "ERROR: unable to open accelerometer", Toast.LENGTH_LONG
             ).show()
         }
+
+        copyRawConfigToInternalStorage()
 
         // Our open folder button
         // Use private external files directory root for config (app has full access)
@@ -203,6 +205,34 @@ class MainActivity : AppCompatActivity(), CameraFrameListener, SensorEventListen
             toggleSystemJNI(isRunningOV)
         }
 
+    }
+    
+    fun copyRawConfigToInternalStorage() {
+        // 1. Apunta a /sdcard/Android/data/com.openvins.android/files/config
+        val targetDir = File(getExternalFilesDir(null), "config")
+        if (!targetDir.exists()) {
+        targetDir.mkdirs()
+        }
+
+        // 2. Obtiene todos los IDs de archivos cargados en res/raw
+        val rawFields = R.raw::class.java.fields
+
+        for (field in rawFields) {
+            try {
+                val resId = field.getInt(null)
+                val fileName = "${field.name}.yaml" // O la extensión que usen tus archivos
+                val outFile = File(targetDir, fileName)
+
+                // Copia o sobrescribe el archivo en el almacenamiento privado de la app
+                resources.openRawResource(resId).use { inputStream ->
+                    FileOutputStream(outFile).use { outputStream ->
+                        inputStream.copyTo(outputStream)
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     override fun onRequestPermissionsResult(
