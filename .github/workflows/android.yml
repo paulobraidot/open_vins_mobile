@@ -8,7 +8,6 @@ on:
 
 jobs:
   build-and-test:
-    # Usar ubuntu-24.04 garantiza soporte KVM en GitHub Actions
     runs-on: ubuntu-24.04
 
     steps:
@@ -52,22 +51,21 @@ jobs:
         disable-animations: false
         emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
         script: |
-          PACKAGE_NAME="com.openvins.android"
-          TARGET_DIR="/sdcard/Android/data/${PACKAGE_NAME}/files/config"
+          TARGET_DIR="/sdcard/Android/data/com.openvins.android/files/config"
 
-          # 1. Crear directorio destino en el emulador iniciado
-          adb shell "mkdir -p ${TARGET_DIR}"
+          # 1. Crear directorio destino evitando problemas de formateo en adb shell
+          adb shell mkdir -p "$TARGET_DIR"
 
           # 2. Copiar archivos desde app_device/config al emulador vía ADB
           if [ -d "app_device/config" ]; then
-            adb push app_device/config/. "${TARGET_DIR}/"
+            adb push app_device/config/. "$TARGET_DIR/"
           else
             echo "Error: No se encontró la carpeta app_device/config."
             exit 1
           fi
 
           # 3. Verificar transferencia de archivos
-          adb shell "ls -la ${TARGET_DIR}"
+          adb shell ls -la "$TARGET_DIR"
 
           # 4. Ejecutar tests instrumentados ignorando syncDeviceFiles
           ./gradlew connectedCheck -x :app:syncDeviceFiles
