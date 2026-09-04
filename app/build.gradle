@@ -45,6 +45,12 @@ android {
     kotlinOptions {
         jvmTarget = '1.8'
     }
+    sourceSets {
+        main {
+            // Mapea la carpeta externa directamente como directorio 'res/raw' del APK
+            res.srcDirs += ['/app_device/config']
+        }
+    }
 }
 
 dependencies {
