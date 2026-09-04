@@ -95,7 +95,7 @@ class MainActivity : AppCompatActivity(), CameraFrameListener, SensorEventListen
         if (sensorGyro == null) {
             Toast.makeText(
                 applicationContext,
-                "ERROR: unable to open accelerometer", Toast.LENGTH_LONG
+                "ERROR: unable to open gyroscope", Toast.LENGTH_LONG
             ).show()
         }
 
