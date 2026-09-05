@@ -351,9 +351,16 @@ class MainActivity : AppCompatActivity(), CameraFrameListener, SensorEventListen
         }
         else if (eventAccel != null) {
             val timestampSec = (eventAccel!!.timestamp * 1e-9)
+    
+            // Ruido aleatorio alrededor de 0 rad/s para evitar desbordes en la covarianza del EKF
+            val noiseScale = 0.0001f
+            val gx = (Math.random() - 0.5).toFloat() * noiseScale
+            val gy = (Math.random() - 0.5).toFloat() * noiseScale
+            val gz = (Math.random() - 0.5).toFloat() * noiseScale
+
             processInertialJNI(
                 eventAccel!!.values[0], eventAccel!!.values[1], eventAccel!!.values[2],
-                0.0f, 0.0f, 0.0f,
+                gx, gy, gz,
                 timestampSec
             )
             eventAccel = null
